@@ -113,6 +113,22 @@
           </details>
         </div>
 
+        <div class="pf-card" id="detail-card">
+          <div class="pf-card-h">细节增强</div>
+          <p class="pf-mute" id="detail-note">用「细节」笔刷（D）标出要保细节的区域；重算只写回标记格，可撤销。</p>
+          <label class="pf-topfield">强度
+            <select id="detail-level">
+              <option value="0">轻</option>
+              <option value="1" selected>中</option>
+              <option value="2">强</option>
+            </select>
+          </label>
+          <div class="pf-toolrow">
+            <button class="pf-btn" id="detail-clear">清除标记</button>
+            <button class="pf-btn primary" id="detail-apply">重算细节区</button>
+          </div>
+        </div>
+
         <div class="pf-card" id="tools-card">
           <div class="pf-card-h">编辑工具</div>
           <div class="pf-toolgrid">
@@ -123,6 +139,7 @@
             <button class="pf-tile" id="tool-eraser"></button>
             <button class="pf-tile" id="tool-bucket"></button>
             <button class="pf-tile" id="tool-picker"></button>
+            <button class="pf-tile" id="tool-detail"></button>
             <button class="pf-tile" id="tool-line"></button>
             <button class="pf-tile" id="tool-rect"></button>
             <button class="pf-tile" id="tool-ellipse"></button>

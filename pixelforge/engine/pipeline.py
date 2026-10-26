@@ -18,7 +18,7 @@ import numpy as np
 from engine.ai.base import LineartProvider, MattingProvider, RegenerationProvider
 from engine.ai.stub import UnavailableProvider
 from engine.recipe import Recipe
-from engine.types import ConversionArtifacts, ConversionResult, RGBImage
+from engine.types import ConversionArtifacts, ConversionResult, IndexGrid, Palette, RGBImage
 
 
 @dataclass
@@ -62,11 +62,87 @@ class ConversionPipeline:
         return self._grid_stages(image, art, recipe)
 
     def rerun_region(
-        self, image: RGBImage, recipe: Recipe, region: "np.ndarray", param_delta: dict
+        self,
+        image: RGBImage,
+        recipe: Recipe,
+        region: "np.ndarray",
+        param_delta: dict,
+        base: ConversionResult,
+        expand_colors: int = 0,
     ) -> ConversionResult:
-        """局部重转换：region 内以 param_delta 覆盖参数重跑 S2–S5，区域外保留原结果。
-        v1.5 实现；契约先行占位。"""
-        raise NotImplementedError
+        """局部重转换（M4）：region 内用 param_delta 重跑 S2，区域外保留 base。
+
+        约束（与编辑器契约一致）：
+        - 只接受 sampling 增量；量化沿用 base 调色板，旧索引语义不变；
+        - 区域不再是 extract 色板时，可从区域片追加 ≤expand_colors 个新色到色板尾部；
+        - 墨线层原样保留（不改 ink，避免 s4 重着色再动色板）。
+        """
+        import copy
+        import time
+
+        from engine.core.oklab import delta_e, rgb_to_oklab
+        from engine.core.palette import extract_from_image, nearest_palette_index
+        from engine.stages import s2_sampling
+
+        t0 = time.perf_counter()
+        tw, th = recipe.target_wh
+        mask = np.asarray(region, dtype=bool)
+        if mask.shape != (th, tw):
+            raise ValueError(f"区域掩码尺寸必须为 {tw}×{th}，实际 {mask.shape[::-1]}")
+
+        raw = copy.deepcopy(recipe.raw)
+        for k, v in (param_delta or {}).items():
+            if isinstance(v, dict) and isinstance(raw.get(k), dict):
+                raw[k] = {**raw[k], **v}
+            else:
+                raw[k] = v
+        merged = Recipe(raw=raw)
+
+        art = self._precompute(image, recipe)  # preprocess/structure 未变 → 命中缓存
+        small = s2_sampling.run(art.P0, art.E, merged, recipe.target_wh)
+
+        palette = base.palette
+        appended = 0
+        if expand_colors > 0 and palette.source == "extract" and mask.any():
+            extra = extract_from_image(small[mask].reshape(-1, 1, 3), int(expand_colors))
+            old_labs = rgb_to_oklab(palette.colors)
+            keep: list[np.ndarray] = []
+            for c in extra.colors:
+                lab = rgb_to_oklab(c.reshape(1, 1, 3))
+                if len(old_labs) and float(delta_e(lab, old_labs).min()) < 0.03:
+                    continue  # 与现有色太近，不追加
+                if keep:
+                    kl = rgb_to_oklab(np.stack(keep).reshape(-1, 1, 3))
+                    if float(delta_e(lab, kl).min()) < 0.03:
+                        continue  # 与已追加色重复
+                keep.append(c.astype(np.uint8))
+                if len(keep) >= int(expand_colors):
+                    break
+            if keep:
+                palette = Palette(
+                    colors=np.vstack([palette.colors, np.stack(keep)]),
+                    name=palette.name,
+                    source=palette.source,
+                )
+                appended = len(keep)
+
+        idx = nearest_palette_index(small, palette)
+        fill_data = base.fill.data.copy()
+        changed = int((idx[mask] != fill_data[mask]).sum())
+        fill_data[mask] = idx[mask]
+
+        meta = {
+            "size": recipe.target_wh,
+            "changed_cells": changed,
+            "appended_colors": appended,
+            "region_ms": round((time.perf_counter() - t0) * 1000, 1),
+        }
+        return ConversionResult(
+            fill=IndexGrid(data=fill_data),
+            ink=base.ink,  # 墨线原样保留
+            palette=palette,
+            meta=meta,
+        )
 
     # ------------------------------------------------------------------
     def _precompute(self, image: RGBImage, recipe: Recipe) -> ConversionArtifacts:

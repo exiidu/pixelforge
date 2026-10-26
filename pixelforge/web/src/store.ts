@@ -16,7 +16,7 @@ export interface PFLayer {
 }
 
 export type Tool = "move" | "select" | "lasso" | "pencil" | "eraser" | "bucket" | "picker"
-  | "line" | "rect" | "ellipse" | "hand";
+  | "line" | "rect" | "ellipse" | "hand" | "detail";
 export type Symmetry = "off" | "h" | "v" | "quad";
 export type PaletteSort = "usage" | "hue" | "light" | "sat";
 /** 矩形选区（格子坐标，含端点，已归一化 x0<=x1, y0<=y1）。 */
@@ -33,7 +33,22 @@ export interface HistStep { layerId: string; ops: CellOp[] }
 export interface HistLayerFx {
   id: string; name: string; kind: PFLayer["kind"]; at: number; on: "redo" | "undo";
 }
-export interface HistEntry { label: string; steps: HistStep[]; layerFx?: HistLayerFx }
+/** base 层局部补丁（M4 细节重算）：撤销/重做时恢复 fill/ink 与色板尾部追加。 */
+export interface BasePatch {
+  cells: number[];
+  beforeFill: number[];
+  afterFill: number[];
+  beforeInk: Array<number | null>; // null = 该文档无墨线层
+  afterInk: Array<number | null>;
+  paletteBefore: [number, number, number][];
+  paletteAfter: [number, number, number][];
+}
+export interface HistEntry {
+  label: string;
+  steps: HistStep[];
+  layerFx?: HistLayerFx;
+  base?: BasePatch;
+}
 
 /** 每文档独立配方参数（M3 参数面板回显/编辑；送引擎时转成 overrides）。 */
 export interface RecipeParams {
@@ -101,6 +116,8 @@ export interface EditorDoc {
   dirty: boolean;
   src?: { file?: File; path?: string }; // 重转换用源；空 = 新建画布
   blank?: boolean; // true = 纯手绘画布（无源图，不参与转换）
+  /** M4：细节重算标记（网格格号；仅当前文档，重算成功后清空）。 */
+  detailMask?: Set<number>;
   history: { undo: HistEntry[]; redo: HistEntry[] };
   /** 重转换前的调色板快照（手改索引重绑基准；内部字段，不序列化）。 */
   _palBefore?: [number, number, number][];
@@ -123,6 +140,7 @@ export interface AppState {
   paletteSort: PaletteSort;
   applyAll: boolean; // M3：配方改动广播到全部标签
   underlay: number;  // M3：描图底图不透明度 0-100（源图垫在透明格下方）
+  detailLevel: number; // M4：细节增强强度档 0=轻 1=中 2=强
 }
 
 interface State extends AppState {
@@ -155,6 +173,7 @@ let state: State = {
   paletteSort: "usage",
   applyAll: false,
   underlay: 0,
+  detailLevel: 1,
   _docSeq: 0,
 };
 

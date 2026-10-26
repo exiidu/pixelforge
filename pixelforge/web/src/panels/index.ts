@@ -493,6 +493,7 @@ export function mountTools(): void {
     ["eraser", "tool-eraser", "橡皮（E）· 删手改回算法值"],
     ["bucket", "tool-bucket", "油漆桶（G）· 泛洪同色连通区"],
     ["picker", "tool-picker", "取色（I）"],
+    ["detail", "tool-detail", "细节（D）· 标记局部重算区域（Alt 擦除）"],
     ["line", "tool-line", "直线（L）· 拖拽画线"],
     ["rect", "tool-rect", "矩形（R）· 拖拽画框，按住 Shift 填充"],
     ["ellipse", "tool-ellipse", "椭圆（O）· 拖拽画椭圆，按住 Shift 填充"],

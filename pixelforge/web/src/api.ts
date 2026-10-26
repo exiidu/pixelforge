@@ -101,3 +101,35 @@ export async function extractLineartPath(imagePath: string, mode = "onnx"): Prom
   );
   return res.json();
 }
+
+export interface RerunRegionResponse {
+  job_id: string;
+  width: number;
+  height: number;
+  palette: [number, number, number][]; // 旧色前缀不变；expand_colors 时尾部追加
+  fill: number[][];
+  ink: number[][] | null; // 本轮原样保留
+  meta: { changed_cells: number; appended_colors: number; region_ms: number; size: [number, number] };
+}
+
+/** M4：区域细节重算（regionPng 为网格尺寸白底黑字蒙版；白=重算）。 */
+export async function rerunRegion(
+  jobId: string,
+  regionPng: string,
+  paramDelta: Record<string, unknown> = {},
+  expandColors = 0,
+): Promise<RerunRegionResponse> {
+  const res = await ensureOk(
+    await fetch("/api/rerun_region", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: jobId,
+        region_png: regionPng,
+        param_delta: paramDelta,
+        expand_colors: expandColors,
+      }),
+    }),
+  );
+  return res.json();
+}

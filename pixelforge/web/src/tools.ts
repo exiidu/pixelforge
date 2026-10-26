@@ -4,7 +4,7 @@
 import {
   activeDoc, activeLayer, getState, setState, updateDoc, layerById,
   layerFillAt, layerInkAt, mkLayer,
-  type CellOp, type CellOverride, type EditorDoc, type HistEntry, type HistStep, type Rect,
+  type BasePatch, type CellOp, type CellOverride, type EditorDoc, type HistEntry, type HistStep, type Rect,
 } from "./store";
 import { invalidateBitmaps } from "./render";
 import { transformPalette } from "./color";
@@ -81,11 +81,13 @@ function applyLayerOps(layer: { data: Map<number, CellOverride> }, ops: CellOp[]
 /** 提交一组操作（可跨图层 steps）到历史。steps 的执行顺序即记录顺序。
  *  entry.layerFx：操作新建/删除的图层（redo/undo 各自还原图层存在性）。 */
 function pushEntry(doc: EditorDoc, entry: HistEntry): void {
-  if (entry.steps.reduce((n, s) => n + s.ops.length, 0) === 0 && !entry.layerFx) return;
+  const n = entry.steps.reduce((n, s) => n + s.ops.length, 0);
+  if (n === 0 && !entry.layerFx && !entry.base) return;
   for (const s of entry.steps) {
     const layer = layerById(doc, s.layerId);
     if (layer) applyLayerOps(layer, s.ops, "after");
   }
+  if (entry.base) applyBasePatch(doc, entry.base, "after");
   doc.history.undo.push(entry);
   if (doc.history.undo.length > 100) doc.history.undo.shift();
   doc.history.redo.length = 0;
@@ -100,6 +102,27 @@ function commit(doc: EditorDoc, label: string, steps: HistStep[], layerFx?: Hist
 
 function commitLayer(doc: EditorDoc, layerId: string, ops: CellOp[], label: string): void {
   commit(doc, label, [{ layerId, ops }]);
+}
+
+/** base 层局部补丁（细节重算）：恢复 fill/ink 与色板（含尾部追加色）。 */
+function applyBasePatch(doc: EditorDoc, patch: BasePatch, mode: "before" | "after"): void {
+  const fill = mode === "before" ? patch.beforeFill : patch.afterFill;
+  const ink = mode === "before" ? patch.beforeInk : patch.afterInk;
+  for (let k = 0; k < patch.cells.length; k++) {
+    const i = patch.cells[k];
+    doc.fill[i] = fill[k];
+    if (doc.ink && ink[k] !== null) doc.ink[i] = ink[k]!;
+  }
+  const pal = mode === "before" ? patch.paletteBefore : patch.paletteAfter;
+  doc.paletteBase = pal.map((c) => [...c] as [number, number, number]);
+  doc.palette = transformPalette(doc.paletteBase, doc.paletteFx);
+  doc._palBefore = undefined;
+  if (getState().colorIndex >= doc.paletteBase.length) setState({ colorIndex: 0 });
+}
+
+/** M4：细节重算结果入历史（base 补丁；撤销/重做连色板追加一起回滚）。 */
+export function commitBasePatch(doc: EditorDoc, label: string, patch: BasePatch): void {
+  pushEntry(doc, { label, steps: [], base: patch });
 }
 
 /** 笔画缓冲：一笔（pointerdown→up）只产生一条历史。 */
@@ -716,6 +739,7 @@ export function undo(): void {
     const l = layerById(doc, step.layerId);
     if (l) applyLayerOps(l, step.ops, "before");
   }
+  if (entry.base) applyBasePatch(doc, entry.base, "before");
   // 移除因 undo 而清空的层（提取层）：仅在 on=redo 的层、undo 后已空时删除——由 entryApplyFx 处理
   doc.history.redo.push(entry);
   invalidateBitmaps(doc);
@@ -731,6 +755,7 @@ export function redo(): void {
     const l = layerById(doc, step.layerId);
     if (l) applyLayerOps(l, step.ops, "after");
   }
+  if (entry.base) applyBasePatch(doc, entry.base, "after");
   doc.history.undo.push(entry);
   invalidateBitmaps(doc);
   updateDoc(doc, {});

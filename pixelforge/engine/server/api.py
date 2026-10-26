@@ -10,7 +10,7 @@
 - POST /api/lineart_file        multipart 上传版线稿提取（编辑器文件选择用）
 - GET/POST /api/session         编辑器会话自动保存（web/session.json）
 - WS   /api/preview             参数变更实时预览推送
-- POST /api/rerun_region        局部重转换（v1.5，暂 501）
+- POST /api/rerun_region        局部重转换（M4：掩码区内重采样，色板固定/可追加）
 
 返回的 fill/ink 为调色板索引二维数组（墨线层非线格为 -1），编辑器直接可编辑。
 """
@@ -67,8 +67,9 @@ class MattingRequest(BaseModel):
 
 class RerunRegionRequest(BaseModel):
     job_id: str
-    region_png: str                # 区域蒙版（白=重算）
-    param_delta: dict
+    region_png: str                # 网格尺寸蒙版 PNG（白=重算）
+    param_delta: dict = {}
+    expand_colors: int = 0         # 从区域追加到色板尾部的新色上限（0=不改板）
 
 
 class SessionRequest(BaseModel):
@@ -353,7 +354,67 @@ def session_save(req: SessionRequest):
 
 @app.post("/api/rerun_region")
 def rerun_region(req: RerunRegionRequest):
-    raise HTTPException(501, "rerun_region: v1.5 实现（分区参数 + 局部重跑）")
+    """区域细节重算（M4）：只改掩码内的 fill，色板前缀不动（可尾部追加）。"""
+    job = _JOBS.get(req.job_id)
+    if job is None:
+        raise HTTPException(404, f"job 不存在: {req.job_id}")
+    result = job["result"]
+    h, w = result.fill.data.shape
+    mask = _decode_region_mask(req.region_png, w, h)
+    delta = _validate_region_delta(req.param_delta)
+    try:
+        new_result = _pipeline.rerun_region(
+            job["image"], job["recipe"], mask, delta, result,
+            expand_colors=max(0, min(16, int(req.expand_colors))),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    job["result"] = new_result  # 连续调用可链式生效
+    return {
+        "job_id": req.job_id,
+        "width": int(new_result.fill.data.shape[1]),
+        "height": int(new_result.fill.data.shape[0]),
+        "palette": new_result.palette.colors.tolist(),
+        "fill": new_result.fill.data.tolist(),
+        "ink": new_result.ink.data.tolist() if new_result.ink is not None else None,
+        "meta": new_result.meta,
+    }
+
+
+_REGION_DELTA_KEYS = {"weights", "soft_ratio", "merge_delta"}
+_REGION_WEIGHT_KEYS = {"edge", "dark", "contrast"}
+
+
+def _decode_region_mask(region_png: str, w: int, h: int) -> np.ndarray:
+    """解码网格尺寸蒙版：白（>127）= 重算。"""
+    raw = region_png.split(",", 1)[-1] if region_png.startswith("data:") else region_png
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(raw))).convert("L")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"蒙版无法解析: {e}") from e
+    mask = np.array(img) > 127
+    if mask.shape != (h, w):
+        raise HTTPException(400, f"蒙版尺寸必须为 {w}×{h}，实际 {mask.shape[1]}×{mask.shape[0]}")
+    return mask
+
+
+def _validate_region_delta(delta: dict | None) -> dict:
+    """只允许采样参数：量化/预处理/结构/墨线改动会破坏索引或全局语义。"""
+    if not delta:
+        return {}
+    if not isinstance(delta, dict) or set(delta) - {"sampling"}:
+        raise HTTPException(400, "param_delta 仅支持 sampling（权重/软边/合并阈值）")
+    out: dict = {}
+    for k, v in (delta.get("sampling") or {}).items():
+        if k not in _REGION_DELTA_KEYS:
+            raise HTTPException(400, f"采样参数不支持: {k}")
+        if k == "weights":
+            if not isinstance(v, dict) or set(v) - _REGION_WEIGHT_KEYS:
+                raise HTTPException(400, "weights 仅支持 edge/dark/contrast")
+            out["weights"] = {key: float(val) for key, val in v.items()}
+        else:
+            out[k] = float(v)
+    return {"sampling": out} if out else {}
 
 
 @app.websocket("/api/preview")

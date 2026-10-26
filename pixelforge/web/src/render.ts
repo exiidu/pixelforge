@@ -171,6 +171,7 @@ export interface RenderOptions {
   lineartImg?: HTMLImageElement | null; // 线稿文档的源分辨率图（连续图像，非像素网格）
   underlay?: number; // 描图底图不透明度 0-1（源图垫在图层下方，透明格可见）
   selection?: import("./store").Selection | null;
+  detailMask?: Set<number> | null; // M4：细节重算标记（橙色半透明覆盖）
 }
 
 export function renderView(
@@ -224,6 +225,14 @@ export function renderView(
     ctx.globalAlpha = 1;
   }
   ctx.drawImage(buildBitmaps(doc).canvas, 0, 0, canvas.width, canvas.height);
+
+  // 细节重算标记：橙色半透明格（仅标记，不改像素）
+  if (opts.detailMask?.size) {
+    ctx.fillStyle = "rgba(255,150,40,.32)";
+    for (const i of opts.detailMask) {
+      ctx.fillRect((i % doc.w) * z, Math.floor(i / doc.w) * z, z, z);
+    }
+  }
 
   if (opts.showGrid && z >= 6) {
     ctx.strokeStyle = "rgba(128,128,128,.28)";

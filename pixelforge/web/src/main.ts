@@ -1,8 +1,8 @@
 /** PixelForge 编辑器 M1 装配：打开→转换→渲染，多文档标签，缩放/网格/对比。M2.7 图层栈。 */
 
 import "./styles/main.css";
-import { convertFile, convertPath, extractLineartFile, extractLineartPath, health,
-  type ConvertResponse, type LineartResponse } from "./api";
+import { convertFile, convertPath, extractLineartFile, extractLineartPath, health, rerunRegion,
+  type ConvertResponse, type LineartResponse, type RerunRegionResponse } from "./api";
 import { compositeDoc, compositeLineart, renderView, invalidateBitmaps, patchBitmapCells } from "./render";
 import {
   activeDoc, addDoc, getState, setState, subscribe, hexOf, updateDoc, mkLayer, presetRecipe,
@@ -13,7 +13,7 @@ import { mountLayers, mountPalette, mountTabs, mountTools, mountHistory, mountCo
 import { bucketFill, flipSelection, finishMove, copySelectionToOffset, paintCells, pixelPerfectLine, brushTipCells,
   shapeCells, shapePreviewApply, shapePreviewEnd, magneticSnap, polygonCells,
   beginStroke, endStroke, stampCells, redo, undo, compositeFill, ensureDocColor,
-  extractSelectionToLayer, deleteLayer } from "./tools";
+  extractSelectionToLayer, deleteLayer, scopeHas, commitBasePatch } from "./tools";
 import { rgbToHex, transformPalette, ZERO_PALETTE_FX, type PaletteFx } from "./color";
 
 /** 两格间的 Bresenham 线（磁力套索路径插值）。 */
@@ -376,6 +376,7 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
         colorsUsed: r.meta.colors_used,
         ms: r.meta.grid_ms,
         history: { undo: [], redo: [] },
+        detailMask: new Set<number>(),
       });
       doc._palBefore = undefined;
       setState({ selection: null, colorIndex: 0, zoom: fitZoomFor(r.width, r.height) });
@@ -393,6 +394,7 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
         sourceUrl: r.source_png ? `data:image/png;base64,${r.source_png}` : "",
         colorsUsed: r.meta.colors_used,
         ms: r.meta.grid_ms,
+        ...(dimsChanged ? { detailMask: new Set<number>() } : {}),
       });
       if (dimsChanged) {
         // 网格变了：格号重映射（最近格）后按 OKLab 最近色重绑索引；超界丢弃
@@ -436,7 +438,107 @@ function setStatus(text: string): void {
   $("stat-doc").textContent = text;
 }
 
-/* ------------------------------------------------ 手改重放（重转换后保手改） *//** 同尺寸重转换：调色板重排了 → 每个层的 override 索引按 OKLab 最近色重绑。 */
+/* ------------------------------------------------ M4 细节增强（区域重算） */
+/** 强度档：权重倍率 / 软边与合并阈值收紧 / 区域追加色上限。 */
+const DETAIL_LEVELS = [
+  { extra: 4, edge: 1.2, dark: 1.1, soft: 0.9, merge: 0.8 },
+  { extra: 8, edge: 1.5, dark: 1.25, soft: 0.8, merge: 0.6 },
+  { extra: 12, edge: 2.0, dark: 1.5, soft: 0.7, merge: 0.4 },
+];
+
+/** 标记 → 网格尺寸黑白蒙版 PNG（白=重算）。 */
+function detailMaskPng(doc: EditorDoc): string {
+  const cv = document.createElement("canvas");
+  cv.width = doc.w;
+  cv.height = doc.h;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, doc.w, doc.h);
+  ctx.fillStyle = "#fff";
+  for (const i of doc.detailMask ?? []) {
+    ctx.fillRect(i % doc.w, Math.floor(i / doc.w), 1, 1);
+  }
+  return cv.toDataURL("image/png").split(",")[1];
+}
+
+/** 局部细节重算：只写回标记格；色板前缀不动（可尾部追加）；整笔可撤销。 */
+async function rerunDetailRegion(): Promise<void> {
+  const doc = activeDoc();
+  if (!doc) return;
+  if (doc.blank || !doc.src) {
+    setStatus("空白画布 / 无源图文档不支持细节重算");
+    return;
+  }
+  if (!doc.detailMask?.size) {
+    setStatus("先用「细节」笔刷标记要重算的区域");
+    return;
+  }
+  const cells = [...doc.detailMask].sort((a, b) => a - b);
+  const level = DETAIL_LEVELS[Math.max(0, Math.min(2, getState().detailLevel))];
+  const r = doc.recipe;
+  const delta = {
+    sampling: {
+      weights: { edge: r.edge * level.edge, dark: r.dark * level.dark, contrast: r.contrast },
+      soft_ratio: Math.min(4, Math.max(0.4, r.softRatio * level.soft)),
+      merge_delta: Math.max(0, r.mergeDelta * level.merge),
+    },
+  };
+  setStatus(`细节重算中… ${doc.name}（${cells.length} 格）`);
+  try {
+    let resp: RerunRegionResponse;
+    try {
+      resp = await rerunRegion(doc.jobId, detailMaskPng(doc), delta, level.extra);
+    } catch (err) {
+      if (!String((err as Error).message).includes("404")) throw err;
+      // 引擎重启 / 会话恢复后 job 失效：全量重转换换新 job 再重试一次
+      const oldW = doc.w, oldH = doc.h;
+      await reconvertDoc(doc);
+      if (doc.w !== oldW || doc.h !== oldH) {
+        setStatus("重转换后网格尺寸变化，细节标记已失效，请重新标记");
+        return;
+      }
+      resp = await rerunRegion(doc.jobId, detailMaskPng(doc), delta, level.extra);
+    }
+    // 色板契约：旧索引前缀必须一致，否则中止（不写画布，保证可回滚）
+    const palBefore = doc.paletteBase.map((c) => [...c] as [number, number, number]);
+    const prefixOk = resp.palette.slice(0, palBefore.length).every(
+      (c, i) => c[0] === palBefore[i][0] && c[1] === palBefore[i][1] && c[2] === palBefore[i][2],
+    );
+    if (!prefixOk) throw new Error("色板前缀不一致，已中止（请先重转换该文档）");
+
+    const beforeFill = cells.map((i) => doc.fill[i]);
+    const beforeInk = cells.map((i) => (doc.ink ? doc.ink[i] : null));
+    const afterFill = cells.map((i) => resp.fill[Math.floor(i / doc.w)][i % doc.w]);
+    for (let k = 0; k < cells.length; k++) doc.fill[cells[k]] = afterFill[k];
+    if (resp.palette.length > doc.paletteBase.length) {
+      doc.paletteBase = resp.palette.map((c) => [...c] as [number, number, number]);
+      doc.palette = transformPalette(doc.paletteBase, doc.paletteFx);
+    }
+    const afterInk = cells.map((i) => (doc.ink ? doc.ink[i] : null));
+    doc.detailMask = new Set();
+    commitBasePatch(doc, "细节重算", {
+      cells,
+      beforeFill,
+      afterFill,
+      beforeInk,
+      afterInk,
+      paletteBefore: palBefore,
+      paletteAfter: doc.paletteBase.map((c) => [...c] as [number, number, number]),
+    });
+    invalidateBitmaps(doc);
+    redrawCanvas();
+    setStatus(
+      `细节重算完成 · ${cells.length} 格 · 改动 ${resp.meta.changed_cells} · ${resp.meta.region_ms}ms`
+      + (resp.meta.appended_colors ? ` · +${resp.meta.appended_colors} 色` : ""),
+    );
+  } catch (err) {
+    setStatus(`细节重算失败: ${(err as Error).message}`);
+    redrawCanvas();
+  }
+}
+
+/* ------------------------------------------------ 手改重放（重转换后保手改） */
+/** 同尺寸重转换：调色板重排了 → 每个层的 override 索引按 OKLab 最近色重绑。 */
 function rebindPalette(doc: import("./store").EditorDoc, newPal: [number, number, number][]): void {
   const oldPal = doc._palBefore ?? doc.paletteBase; // 无快照（新建画布）时板未变，恒等映射
   const nearest = (c: [number, number, number]) => {
@@ -516,6 +618,7 @@ function redrawCanvas(): void {
     lineartImg: ensureLineartImage(doc),
     underlay: underlay / 100,
     selection: getState().selection,
+    detailMask: doc.detailMask,
   });
   $("zoom-v").textContent = `${Math.round(zoom * 100)}%`;
   setStatus(
@@ -563,6 +666,8 @@ let spaceTool: string | null = null; // 空格临时手掌前的工具
 let shapeDrag: { kind: "line" | "rect" | "ellipse"; start: [number, number] } | null = null;
 let lastShapeCells: Array<[number, number]> | null = null;
 let lassoDrag = false;  // 磁力套索
+let detailDrag = false; // M4 细节笔刷（只改标记，不改像素）
+let lastDetailCell: [number, number] | null = null;
 
 function cellFromEvent(e: PointerEvent): [number, number] | null {
   const doc = activeDoc();
@@ -628,12 +733,41 @@ canvas.addEventListener("pointerdown", (e) => {
     lastShapeCells = null;
     return;
   }
+  if (tool === "detail") {
+    if (doc.blank) { setStatus("空白画布没有源图，无法细节重算"); return; }
+    detailDrag = true;
+    lastDetailCell = cell;
+    paintDetailMask(doc, [cell], e.altKey);
+    return;
+  }
   // 铅笔/橡皮：一笔一条历史
   painting = true;
   beginStroke(doc);
   drawStroke(cell, cell);
   lastCell = cell;
 });
+
+/** 细节笔刷：只增删标记格（橙色覆盖），不写像素；Alt = 擦除。 */
+function paintDetailMask(doc: EditorDoc, pts: Array<[number, number]>, erase: boolean): void {
+  const mask = doc.detailMask ?? (doc.detailMask = new Set<number>());
+  let changed = false;
+  for (const [px, py] of pts) {
+    for (const [cx, cy] of brushTipCells(px, py, getState().brushSize)) {
+      if (cx < 0 || cy < 0 || cx >= doc.w || cy >= doc.h || !scopeHas(doc, cx, cy)) continue;
+      const i = cy * doc.w + cx;
+      if (erase) {
+        if (mask.delete(i)) changed = true;
+      } else if (!mask.has(i)) {
+        mask.add(i);
+        changed = true;
+      }
+    }
+  }
+  if (changed) {
+    redrawCanvas();
+    syncDetailButtons();
+  }
+}
 
 function drawStroke(from: [number, number], to: [number, number]): void {
   const doc = activeDoc();
@@ -698,6 +832,14 @@ canvas.addEventListener("pointermove", (e) => {
       },
       path,
     } });
+  } else if (detailDrag) {
+    const cell = cellFromEvent(e);
+    if (cell) {
+      // 相邻采样点间插值，避免快速拖动留下断点
+      const from = lastDetailCell ?? cell;
+      paintDetailMask(doc, pixelPerfectLine(from[0], from[1], cell[0], cell[1]), e.altKey);
+      lastDetailCell = cell;
+    }
   }
 });
 
@@ -742,14 +884,16 @@ const endPointer = (e: PointerEvent) => {
     }
   }
   painting = false; dragging = false; dragStart = null; lastCell = null;
-  moveDrag = null; shapeDrag = null; lassoDrag = false; panDrag = null;
+  moveDrag = null; shapeDrag = null; lassoDrag = false; panDrag = null; detailDrag = false;
+  lastDetailCell = null;
 };
 canvas.addEventListener("pointerup", endPointer);
 canvas.addEventListener("pointercancel", () => {
   const doc = activeDoc();
   if (shapeDrag && doc) shapePreviewEnd(doc); // 取消时不落历史
   painting = false; dragging = false; dragStart = null; lastCell = null;
-  moveDrag = null; shapeDrag = null; lassoDrag = false; panDrag = null;
+  moveDrag = null; shapeDrag = null; lassoDrag = false; panDrag = null; detailDrag = false;
+  lastDetailCell = null;
   canvas.style.transform = "";
   wrap.classList.remove("panning");
 });
@@ -798,7 +942,7 @@ document.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   const toolKeys: Record<string, string> = {
     b: "pencil", e: "eraser", g: "bucket", i: "picker", s: "select",
-    v: "move", q: "lasso", l: "line", r: "rect", o: "ellipse", h: "hand",
+    v: "move", q: "lasso", l: "line", r: "rect", o: "ellipse", h: "hand", d: "detail",
   };
   if (!selection && toolKeys[k]) { setState({ tool: toolKeys[k] as never }); return; }
   if (k === "m") { // 对称循环：关→H→V→四分
@@ -1345,6 +1489,9 @@ function syncDocModeUI(): void {
   $("lineart-panels").hidden = !lineartDoc;
   $("grid").hidden = lineartDoc;
   $("underlay-wrap").hidden = lineartDoc;
+  $("detail-card").hidden = lineartDoc;
+  ($("detail-level") as HTMLSelectElement).value = String(getState().detailLevel);
+  syncDetailButtons();
   $("mode-note").textContent = lineartPreset || lineartDoc
     ? "线稿模式：按源图分辨率清晰提取，不使用像素网格与尺寸。"
     : "改动即时重转换当前文档；空白画布不受影响。";
@@ -1352,6 +1499,20 @@ function syncDocModeUI(): void {
     $("la-dims").textContent = `${doc.w}×${doc.h} px · ${doc.lineart.mode.toUpperCase()}`;
   }
   if (lineartDoc && getState().selection) setState({ selection: null });
+}
+
+/** 细节增强按钮/文案同步（标记笔刷改动不经过 state，需直接调用）。 */
+function syncDetailButtons(): void {
+  const doc = activeDoc();
+  const can = !!doc && !doc.lineart && !doc.blank;
+  const n = can ? doc!.detailMask?.size ?? 0 : 0;
+  ($("detail-apply") as HTMLButtonElement).disabled = !can || n === 0;
+  ($("detail-clear") as HTMLButtonElement).disabled = !can || n === 0;
+  $("detail-note").textContent = can
+    ? n
+      ? `已标记 ${n} 格（Alt 擦除）；重算只写回标记格，可撤销。`
+      : "用「细节」笔刷（D）标出要保细节的区域；重算只写回标记格，可撤销。"
+    : "空白画布没有源图，无法细节重算。";
 }
 
 for (const [id, key, fmt] of rpRanges) {
@@ -1381,6 +1542,18 @@ $("rp-all").addEventListener("change", (e) => {
   const v = (e.target as HTMLInputElement).checked;
   setState({ applyAll: v });
   setStatus(v ? "参数改动将应用到全部标签" : "参数改动仅作用于当前文档");
+});
+$("detail-level").addEventListener("change", (e) => {
+  setState({ detailLevel: Number((e.target as HTMLSelectElement).value) });
+});
+$("detail-apply").addEventListener("click", () => void rerunDetailRegion());
+$("detail-clear").addEventListener("click", () => {
+  const doc = activeDoc();
+  if (!doc?.detailMask?.size) return;
+  doc.detailMask = new Set();
+  redrawCanvas();
+  syncDetailButtons();
+  setStatus("细节标记已清除");
 });
 subscribe(syncRecipeUI);
 subscribe(syncDocModeUI);
@@ -1595,6 +1768,7 @@ interface SessionDocV1 {
   blank?: boolean;
   srcPath?: string;
   dirty?: boolean;
+  detailMask?: string; // M4：细节标记位图（Uint8 → base64，1=标记）
 }
 interface SessionPayload {
   version: 1;
@@ -1602,7 +1776,7 @@ interface SessionPayload {
   docs: SessionDocV1[];
   ui?: {
     activeIndex?: number; zoom?: number; showGrid?: boolean; preset?: string; size?: number;
-    applyAll?: boolean; underlay?: number; paletteSort?: PaletteSort;
+    applyAll?: boolean; underlay?: number; paletteSort?: PaletteSort; detailLevel?: number;
   };
 }
 
@@ -1620,6 +1794,23 @@ function b64ToI32(b64: string): Int32Array {
   const u8 = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
   return new Int32Array(u8.buffer);
+}
+function u8ToB64(u8: Uint8Array): string {
+  let out = "";
+  const CH = 0x8000;
+  for (let i = 0; i < u8.length; i += CH) out += String.fromCharCode(...u8.subarray(i, i + CH));
+  return btoa(out);
+}
+function maskToB64(mask: Set<number>, n: number): string {
+  const u8 = new Uint8Array(n);
+  for (const i of mask) if (i >= 0 && i < n) u8[i] = 1;
+  return u8ToB64(u8);
+}
+function b64ToMask(b64: string, n: number): Set<number> {
+  const bin = atob(b64);
+  const out = new Set<number>();
+  for (let i = 0; i < Math.min(n, bin.length); i++) if (bin.charCodeAt(i)) out.add(i);
+  return out;
 }
 
 function serializeDoc(doc: EditorDoc, includeSource: boolean): SessionDocV1 {
@@ -1650,6 +1841,7 @@ function serializeDoc(doc: EditorDoc, includeSource: boolean): SessionDocV1 {
     blank: doc.blank,
     srcPath: doc.src?.path,
     dirty: doc.dirty,
+    detailMask: doc.detailMask?.size ? maskToB64(doc.detailMask, doc.w * doc.h) : undefined,
   };
 }
 
@@ -1662,7 +1854,7 @@ function sessionPayload(includeSource: boolean): SessionPayload {
     ui: {
       activeIndex: s.activeIndex, zoom: s.zoom, showGrid: s.showGrid,
       preset: s.preset, size: s.size, applyAll: s.applyAll,
-      underlay: s.underlay, paletteSort: s.paletteSort,
+      underlay: s.underlay, paletteSort: s.paletteSort, detailLevel: s.detailLevel,
     },
   };
 }
@@ -1802,6 +1994,7 @@ function restoreDoc(sd: SessionDocV1): void {
     ms: sd.ms ?? 0,
     src: sd.srcPath ? { path: sd.srcPath } : undefined,
     blank: sd.blank ?? false,
+    detailMask: sd.detailMask ? b64ToMask(sd.detailMask, n) : undefined,
   });
   doc.dirty = sd.dirty ?? false;
 }
@@ -1821,6 +2014,7 @@ function restoreSession(s: SessionPayload): void {
     applyAll: ui.applyAll ?? false,
     underlay: ui.underlay ?? 0,
     paletteSort: ui.paletteSort ?? "usage",
+    detailLevel: ui.detailLevel ?? 1,
   });
   $("grid").setAttribute("aria-pressed", String(getState().showGrid));
   ($("underlay") as HTMLInputElement).value = String(getState().underlay);
