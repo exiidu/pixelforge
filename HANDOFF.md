@@ -89,6 +89,7 @@
 | 文件 | 职责 |
 |---|---|
 | `main.ts` | 装配入口；指针绘制状态机（14 工具分支，含「细节」掩码与「抠背景」alpha 笔刷）；快捷键；参数面板+防抖重转换；细节重算（重试/前缀校验/BasePatch）；批量导入/导出（命名模板/图集/索引 PNG/引擎线稿）；色板 .hex/.gpl 导入导出；配方 JSON 导入导出；色板变换；描图底图；会话自动保存/恢复（含 alpha 位图）；标签右键菜单事件；`__pf` 调试句柄（DEV：composeStats/alphaStats/layerSummary） |
+| `source-store.ts` | M5.2：上传源文件存 IndexedDB（SHA-256 key + LRU 淘汰 200）——会话恢复后仍可重转换/出引擎线稿 |
 | `store.ts` | AppState（docs/activeIndex/zoom/tool/selection/brushSize/customColors/paletteSort/applyAll/underlay/detailLevel）+ pub/sub；EditorDoc 含 layers/recipe/presetName/paletteBase/paletteFx/alpha/detailMask；HistEntry = steps + layerFx + base + palette；moveDoc/closeDocsToRight/closeOtherDocs |
 | `tools.ts` | 笔画缓冲（一笔一条历史）、pixel-perfect 线、形状三件套+实时预览、泛洪、磁力套索吸附/多边形填充、移动（选区/当前层）、翻转、撤销重做、scopeHas/scopeCells、ensureDocColor、抠背景（paintAlphaCells/magicAlphaErase）、色板历史（commitPalette/setPaletteColor/setPaletteBase） |
 | `render.ts` | renderView（图层栈合成/墨线叠加/网格线/选区蚂蚁线/描图底图/细节掩码橙色覆盖）、patchBitmapCells 补丁、位图缓存失效、composeIndexGrid（索引 PNG 用）、真 alpha 合成与边缘泛洪回退 |

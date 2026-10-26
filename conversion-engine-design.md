@@ -138,7 +138,8 @@ S5 后处理 ──────── 孤立像素清理 → 色簇平滑（可�
   "target": { "width": 64, "height": 64 },       // 目标网格
   "preprocess": {
     "bilateral": { "enable": true, "radius": 3, "strength": 0.6 },
-    "levels":    { "saturation": 1.15, "contrast": 1.05 },
+    "levels":    { "saturation": 1.15, "contrast": 1.05,
+                   "bright_contrast": 0.0, "bright_start": 0.6 },  // M5.3 亮部对比增强（0=关；只动亮区）
     "matting":   { "enable": false }              // rembg
   },
   "structure": {

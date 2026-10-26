@@ -190,8 +190,7 @@ interface AppStore {
   **精灵图集**按尺寸分组水平拼条（每组一个文件 `spritesheet_{w}x{h}_{n}.png`）。
 - **描图底图（M3）**：状态栏「描图」0–100% 滑杆，源图按不透明度垫在图层栈下方，
   隐藏/擦除上层后在透明格可见；与「按住对比源图」互斥（对比优先全屏源图）。
-- **参数面板（M3）**：左栏「转换工具」卡内**默认折叠**的详情区——edge/dark/contrast/
-  soft_ratio/merge_delta 滑杆、调色板来源（extract 色数 / gameboy / cga16 / gray8 / paper）、
+- **参数面板（M3；M5.3 增「亮部对比」）**：左栏「转换工具」卡内**默认折叠**的详情区——edge/dark/contrast/**亮部对比（`preprocess.levels.bright_contrast` 0–0.95，只增强亮部对比、暗部与中间调不动，天空/云会分化出更多 fill 色块；0=关，illustration 预设默认 0.5）**/soft_ratio/merge_delta 滑杆、调色板来源（extract 色数 / gameboy / cga16 / gray8 / paper）、
   线稿模式（off/xdog/onnx）、引擎墨线开关；滑杆 300ms 防抖重转换，下拉/复选立即生效；
   每文档独立回显，切换标签自动同步预设/尺寸。
 - **线稿预设 = 图像文档（M3.1）**：`线稿提取` 不再走像素网格——引擎按**源图分辨率**输出
