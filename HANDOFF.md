@@ -56,8 +56,8 @@
 | 引擎 M5-0（`load_rgb_with_alpha`；与 fill 正交的网格 alpha + `alpha_png` 响应；`rerun_region` 不改 alpha） | ✅ 2026-10-26 |
 | 编辑器 M5（真透明合成/棋盘格/导入自动拆「背景层」/抠背景工具 W；索引 PNG 导出；色板 .hex/.gpl 导入导出+单色编辑+锁定；配方 JSON；标签拖拽排序+右键菜单） | ✅ 2026-10-26 |
 | 编辑器 M5.2（B1 上传源文件存 IndexedDB→会话恢复后可重转换；B2 色架删除可撤销；B3 色板导入按 OKLab 最近色重映射索引） | ✅ 2026-10-26 |
-| 引擎 M5.2（**非正方形素材保宽高比**：`target.preserve_aspect`，尺寸=长边；E 自适应归一化；墨线高覆盖度衰减） | ✅ 2026-10-26 |
-| 引擎 M5.3（**亮部对比增强** `preprocess.levels.bright_contrast`：亮部 S 曲线、暗部/中间调不动 → 天空云带在 fill 上层出更多色块；**默认 0=关**，仅 illustration 预设置 0.5；线稿 `xdog.log_domain` 实验开关默认关） | ✅ 2026-10-26 |
+| 引擎 M5.2（**非正方形素材保宽高比**：`target.preserve_aspect`，尺寸=长边） | ✅ 2026-10-26 |
+| 引擎 M5.3（`preprocess.levels.bright_contrast` 亮部对比 = **可选参数，默认 0=关**；修复 S 曲线增量 bug（曾致全局过曝/偏色）；回退无效的 E 自适应归一化与墨线密度衰减） | ✅ 2026-10-26 |
 | 引擎 v1.5（alpha 投票真透明输出） | ✅ 合并进 M5-0 |
 | MCP-2/3（批量打磨、写入工具）、ComfyUI img2img、`/api/convert_batch` | ⬜ |
 

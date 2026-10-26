@@ -2307,8 +2307,18 @@ function normalizeFill(arr: Int32Array, n: number): Int32Array {
   return out;
 }
 
+/** 恢复文档时的配方：预设默认 + 会话覆盖。
+ *
+ * M5.3：`brightContrast` 曾因默认值 0.5 造成全局过曝/偏色，bug 期间保存的会话里带着这个值。
+ * 该参数只在 bug 存在的那段时间出现过，所以恢复时把非 0 一律归零（用户可在面板重新调）。
+ */
+function restoredRecipe(preset: string, saved: Partial<RecipeParams> | undefined): RecipeParams {
+  const r = { ...presetRecipe(preset), ...(saved ?? {}) };
+  if (r.brightContrast) r.brightContrast = 0;
+  return r;
+}
+
 async function restoreDoc(sd: SessionDocV1): Promise<void> {
-  // 源：服务器路径优先；否则从 IndexedDB 取回上传的原文件（M5.2 → 恢复后仍可重转换）
   let src: EditorDoc["src"];
   if (sd.srcPath) src = { path: sd.srcPath };
   else if (sd.srcKey) {
@@ -2327,7 +2337,7 @@ async function restoreDoc(sd: SessionDocV1): Promise<void> {
       palette: [],
       paletteBase: [],
       paletteFx: { ...ZERO_PALETTE_FX },
-      recipe: { ...presetRecipe(preset), ...(sd.recipe ?? {}) },
+      recipe: restoredRecipe(preset, sd.recipe),
       presetName: preset,
       fill: new Int32Array(0),
       ink: null,
@@ -2367,7 +2377,7 @@ async function restoreDoc(sd: SessionDocV1): Promise<void> {
     palette,
     paletteBase: sd.paletteBase ?? palette,
     paletteFx: sd.paletteFx ?? { ...ZERO_PALETTE_FX },
-    recipe: { ...presetRecipe(preset), ...(sd.recipe ?? {}) },
+    recipe: restoredRecipe(preset, sd.recipe),
     presetName: preset,
     fill: normalizeFill(b64ToI32(sd.fill ?? ""), n),
     ink: sd.ink ? normalizeFill(b64ToI32(sd.ink), n) : null,

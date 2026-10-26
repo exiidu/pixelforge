@@ -91,7 +91,7 @@ export function presetRecipe(preset: string): RecipeParams {
     ink: false, lineart: "off",
   };
   if (preset === "illustration") {
-    return { ...base, maxColors: 32, ink: true, lineart: "xdog", brightContrast: 0.5 };
+    return { ...base, maxColors: 32, ink: true, lineart: "xdog" };
   }
   if (preset === "lineart") {
     return { ...base, paletteSource: "builtin", paletteRef: "paper", maxColors: 1, ink: true, lineart: "onnx" };

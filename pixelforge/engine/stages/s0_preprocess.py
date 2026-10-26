@@ -30,7 +30,9 @@ def _boost_bright_contrast(rgb: np.ndarray, c: float, start: float) -> np.ndarra
     t = np.clip((lum - start) / (1.0 - start), 0.0, 1.0)
     ss = t * t * (3.0 - 2.0 * t)
     t2 = t - c * (t - ss)
-    new_lum = start + t2 * (1.0 - start)
+    # 只叠加曲线带来的"增量"：lum < start 时 t=t2=0 → 增量为 0（像素原样保留）。
+    # 早期版本写成 new_lum = start + t2*(1-start)，会把所有暗部/中间调抬到 start（严重过曝/偏色）。
+    new_lum = lum + (t2 - t) * (1.0 - start)
     safe = np.maximum(lum, 1e-4)
     scale = np.where(lum > 1e-4, new_lum / safe, 1.0)
     return np.clip(arr * scale[..., None], 0, 255).astype(np.uint8)
