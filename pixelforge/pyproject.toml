@@ -1,0 +1,20 @@
+[project]
+name = "pixelforge"
+version = "0.1.0"
+description = "个人用图片转像素画引擎：分层索引色输出，确定性管线 + 可选 AI 增强"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "opencv-python",
+    "pillow",
+    "fastapi",
+    "uvicorn[standard]",
+]
+
+[project.optional-dependencies]
+ai = ["onnxruntime"]      # AI 档接入时安装（线稿/抠图模型）
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

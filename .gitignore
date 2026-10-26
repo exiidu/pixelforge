@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mimosa/
+.cache/
+
+# Node
+node_modules/
+
+# Runtime output
+pixelforge/web/session.json
+pixelforge/web/dist/
+tmp_verify/
+
+# Model weights (large binaries)
+*.onnx
+
+# Local tooling
+.trae/

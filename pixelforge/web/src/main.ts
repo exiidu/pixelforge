@@ -1,0 +1,1914 @@
+/** PixelForge 编辑器 M1 装配：打开→转换→渲染，多文档标签，缩放/网格/对比。M2.7 图层栈。 */
+
+import "./styles/main.css";
+import { convertFile, convertPath, extractLineartFile, extractLineartPath, health,
+  type ConvertResponse, type LineartResponse } from "./api";
+import { compositeDoc, compositeLineart, renderView, invalidateBitmaps, patchBitmapCells } from "./render";
+import {
+  activeDoc, addDoc, getState, setState, subscribe, hexOf, updateDoc, mkLayer, presetRecipe,
+  type RecipeParams, type EditorDoc, type PFLayer, type CellOverride, type PaletteSort,
+  type LineartAsset,
+} from "./store";
+import { mountLayers, mountPalette, mountTabs, mountTools, mountHistory, mountColorLib } from "./panels";
+import { bucketFill, flipSelection, finishMove, copySelectionToOffset, paintCells, pixelPerfectLine, brushTipCells,
+  shapeCells, shapePreviewApply, shapePreviewEnd, magneticSnap, polygonCells,
+  beginStroke, endStroke, stampCells, redo, undo, compositeFill, ensureDocColor,
+  extractSelectionToLayer, deleteLayer } from "./tools";
+import { rgbToHex, transformPalette, ZERO_PALETTE_FX, type PaletteFx } from "./color";
+
+/** 两格间的 Bresenham 线（磁力套索路径插值）。 */
+function plainLineBetween(a: [number, number], b: [number, number]): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  let dx = Math.abs(b[0] - a[0]), dy = -Math.abs(b[1] - a[1]);
+  const sx = a[0] < b[0] ? 1 : -1, sy = a[1] < b[1] ? 1 : -1;
+  let err = dx + dy, x = a[0], y = a[1];
+  for (;;) {
+    out.push([x, y]);
+    if (x === b[0] && y === b[1]) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x += sx; }
+    if (e2 <= dx) { err += dx; y += sy; }
+  }
+  return out;
+}
+
+/** 方向键移动选区内容（copy=复制） */
+function moveSelectionBy(doc: import("./store").EditorDoc, dx: number, dy: number, copy: boolean): void {
+  if (copy) copySelectionToOffset(doc, dx, dy);
+  else finishMove(doc, dx, dy);
+}
+
+const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+const canvas = $("canvas") as HTMLCanvasElement;
+const wrap = $("canvaswrap");
+const emptyHint = $("empty");
+const sourceCache = new Map<string, HTMLImageElement>(); // jobId/线稿文档 id → 源图缩略
+const lineartImageCache = new Map<string, HTMLImageElement>(); // doc.id → 源分辨率线稿图
+
+/** 源图缓存键：线稿文档没有引擎 job，用文档 id 区分。 */
+function sourceKey(doc: EditorDoc): string {
+  return doc.lineart ? `la:${doc.id}` : doc.jobId;
+}
+
+/** 取线稿文档的源分辨率图（异步加载，加载完成自动重绘）。 */
+function ensureLineartImage(doc: EditorDoc): HTMLImageElement | null {
+  if (!doc.lineart) return null;
+  const cached = lineartImageCache.get(doc.id);
+  if (cached && cached.src === doc.lineart.url) return cached;
+  const img = new Image();
+  img.onload = () => {
+    if (lineartImageCache.get(doc.id) === img) redrawCanvas();
+  };
+  img.src = doc.lineart.url;
+  lineartImageCache.set(doc.id, img);
+  return img;
+}
+
+function dropLineartImage(docId: string): void {
+  lineartImageCache.delete(docId);
+}
+
+function fitZoomFor(w: number, h: number): number {
+  const pad = 40;
+  const cw = wrap.clientWidth - pad;
+  const ch = wrap.clientHeight - pad;
+  if (cw <= 0 || ch <= 0) return 1;
+  return Math.max(1, Math.min(24, Math.floor(Math.min(cw / w, ch / h))));
+}
+
+/** 线稿是连续图像：允许分数缩放，打开时最多 100%（不放大）。 */
+function fitZoomForLineart(w: number, h: number): number {
+  const pad = 40;
+  const cw = wrap.clientWidth - pad;
+  const ch = wrap.clientHeight - pad;
+  if (cw <= 0 || ch <= 0) return 1;
+  return Math.max(0.05, Math.min(1, cw / w, ch / h));
+}
+
+function docFromResponse(
+  name: string,
+  r: ConvertResponse,
+  src?: { file?: File; path?: string },
+  recipe: RecipeParams = presetRecipe(getState().preset),
+  presetName: string = getState().preset,
+) {
+  const fileLayer = mkLayer("文件层", "file");
+  const canvasLayer = mkLayer("画布层", "canvas");
+  const doc = addDoc({
+    name,
+    jobId: r.job_id,
+    w: r.width,
+    h: r.height,
+    palette: r.palette,
+    paletteBase: r.palette,
+    paletteFx: { ...ZERO_PALETTE_FX },
+    recipe: { ...recipe },
+    presetName,
+    fill: Int32Array.from(r.fill.flat()),
+    ink: r.ink ? Int32Array.from(r.ink.flat()) : null,
+    inkVisible: true,
+    inkOpacity: 1,
+    layers: [canvasLayer, fileLayer], // 画布层在最底，文件层（结构转换结果）在上
+    activeLayerId: fileLayer.id,
+    baseLayerId: fileLayer.id,
+    sourceUrl: r.source_png ? `data:image/png;base64,${r.source_png}` : "",
+    colorsUsed: r.meta.colors_used,
+    ms: r.meta.grid_ms,
+    src,
+  });
+  setState({ zoom: fitZoomFor(r.width, r.height) });
+  cacheSource(r.job_id, r.source_png);
+  return doc;
+}
+
+/** 线稿文档：源分辨率 PNG 直接显示，不建像素网格/图层/调色板。 */
+function docFromLineartResponse(
+  name: string,
+  r: LineartResponse,
+  src: { file?: File; path?: string },
+  recipe: RecipeParams,
+  presetName: string,
+  ms = 0,
+): EditorDoc {
+  const doc = addDoc({
+    name,
+    lineart: { url: `data:image/png;base64,${r.png}`, width: r.width, height: r.height, mode: r.mode },
+    jobId: "",
+    w: r.width,
+    h: r.height,
+    palette: [],
+    paletteBase: [],
+    paletteFx: { ...ZERO_PALETTE_FX },
+    recipe: { ...recipe },
+    presetName,
+    fill: new Int32Array(0),
+    ink: null,
+    inkVisible: false,
+    inkOpacity: 1,
+    layers: [],
+    activeLayerId: "",
+    baseLayerId: "",
+    sourceUrl: r.source_png ? `data:image/png;base64,${r.source_png}` : "",
+    colorsUsed: 0,
+    ms,
+    src,
+  });
+  setState({ zoom: fitZoomForLineart(r.width, r.height) });
+  cacheSource(sourceKey(doc), r.source_png);
+  return doc;
+}
+
+function cacheSource(key: string, png: string | null): void {
+  if (!png) return;
+  const img = new Image();
+  img.onload = () => sourceCache.set(key, img);
+  img.src = `data:image/png;base64,${png}`;
+}
+
+/* ---------------------------------------------------------------- 批量导入（M3） */
+/** 导入统一应用「当前配方」：有活动文档时取它的配方，否则取预设默认。 */
+function importCtx(): { presetName: string; recipe: RecipeParams } {
+  const doc = activeDoc();
+  if (doc && !doc.blank) return { presetName: doc.presetName, recipe: { ...doc.recipe } };
+  return { presetName: getState().preset, recipe: presetRecipe(getState().preset) };
+}
+
+$("file-input").addEventListener("change", (e) => {
+  const files = [...(e.target as HTMLInputElement).files ?? []];
+  (e.target as HTMLInputElement).value = "";
+  void importFiles(files, "打开图片");
+});
+$("folder-input").addEventListener("change", (e) => {
+  const files = [...(e.target as HTMLInputElement).files ?? []];
+  (e.target as HTMLInputElement).value = "";
+  void importFiles(files, "打开文件夹");
+});
+
+/** 批量导入：逐个转换建档；坏文件跳过不中断，完成后汇总失败清单。 */
+async function importFiles(all: File[], label: string): Promise<void> {
+  const files = all
+    .filter((f) => /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name))
+    .sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
+  if (!files.length) { setStatus(`${label}：未找到支持的图片`); return; }
+  const ctx = importCtx();
+  const lineartMode = ctx.presetName === "lineart";
+  const extractMode = ctx.recipe.lineart === "xdog" ? "xdog" : "onnx";
+  const progd = $("progd") as HTMLDialogElement;
+  const t0 = performance.now();
+  const tick = (text: string) => {
+    $("prog-text").textContent = text;
+    $("prog-time").textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  };
+  const timer = window.setInterval(() => {
+    $("prog-time").textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  }, 100);
+  tick(`${lineartMode ? "正在提取线稿" : "正在导入"} 1/${files.length} · ${files[0].name}`);
+  if (!progd.open) progd.showModal();
+  const failed: string[] = [];
+  let ok = 0;
+  try {
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      tick(`${lineartMode ? "正在提取线稿" : "正在导入"} ${i + 1}/${files.length} · ${f.name}`);
+      try {
+        const name = f.name.replace(/\.[^.]+$/, "");
+        if (lineartMode) {
+          const t = performance.now();
+          const r = await extractLineartFile(f, extractMode);
+          docFromLineartResponse(name, r, { file: f }, ctx.recipe, ctx.presetName,
+            Math.round(performance.now() - t));
+        } else {
+          const r = await convertFile(f, ctx.presetName, getState().size, recipeOverrides(ctx.recipe));
+          docFromResponse(name, r, { file: f }, ctx.recipe, ctx.presetName);
+        }
+        ok++;
+      } catch (err) {
+        failed.push(f.name);
+        console.warn("导入失败", f.name, err);
+      }
+    }
+  } finally {
+    window.clearInterval(timer);
+    if (progd.open) progd.close();
+  }
+  const failMsg = failed.length
+    ? ` · 失败 ${failed.length}（${failed.slice(0, 3).join("、")}${failed.length > 3 ? "…" : ""}）`
+    : "";
+  setStatus(`${lineartMode ? "线稿提取完成" : "导入完成"} ${ok}/${files.length} 张${failMsg}`);
+}
+
+/* ------------------------------------------------ 预设/尺寸变更 → 重转换当前文档 */
+let converting = false;
+
+/** 配方参数 → 引擎 overrides（与预设在引擎侧深合并）。 */
+function recipeOverrides(r: import("./store").RecipeParams): Record<string, unknown> {
+  return {
+    sampling: {
+      weights: { edge: r.edge, dark: r.dark, contrast: r.contrast },
+      soft_ratio: r.softRatio,
+      merge_delta: r.mergeDelta,
+    },
+    quantize: {
+      palette: r.paletteSource === "builtin"
+        ? { source: "builtin", ref: r.paletteRef }
+        : { source: "extract", max_colors: r.maxColors },
+    },
+    structure: { lineart: { mode: r.lineart } },
+    ink: { enable: r.ink },
+  };
+}
+
+/** 线稿文档重提取（预设=线稿）：源分辨率连续图像，不建像素网格。 */
+async function reconvertDocLineart(doc: EditorDoc): Promise<void> {
+  if (!doc.src) {
+    setStatus(`${doc.name} · 无源图，无法提取线稿`);
+    return;
+  }
+  if (converting) return;
+  converting = true;
+  setStatus(`提取线稿… ${doc.name}`);
+  const progd = $("progd") as HTMLDialogElement;
+  $("prog-text").textContent = `正在提取线稿 ${doc.name}`;
+  const t0 = performance.now();
+  const progTimer = window.setInterval(() => {
+    $("prog-time").textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  }, 100);
+  if (!progd.open) progd.showModal();
+  try {
+    const mode = doc.recipe.lineart === "xdog" ? "xdog" : "onnx";
+    const r = doc.src.file
+      ? await extractLineartFile(doc.src.file, mode)
+      : await extractLineartPath(doc.src.path!, mode);
+    const ms = Math.round(performance.now() - t0);
+    dropLineartImage(doc.id);
+    updateDoc(doc, {
+      lineart: { url: `data:image/png;base64,${r.png}`, width: r.width, height: r.height, mode: r.mode },
+      w: r.width,
+      h: r.height,
+      palette: [],
+      paletteBase: [],
+      paletteFx: { ...ZERO_PALETTE_FX },
+      fill: new Int32Array(0),
+      ink: null,
+      inkVisible: false,
+      inkOpacity: 1,
+      layers: [],
+      activeLayerId: "",
+      baseLayerId: "",
+      sourceUrl: r.source_png ? `data:image/png;base64,${r.source_png}` : "",
+      colorsUsed: 0,
+      ms,
+      history: { undo: [], redo: [] },
+      _palBefore: undefined,
+    });
+    setState({ selection: null, colorIndex: 0, zoom: fitZoomForLineart(r.width, r.height) });
+    cacheSource(sourceKey(doc), r.source_png); // 此时 doc.lineart 已就位，键为文档 id
+    redrawCanvas();
+  } catch (err) {
+    setStatus(`线稿提取失败 ${doc.name}: ${(err as Error).message}`);
+  } finally {
+    converting = false;
+    window.clearInterval(progTimer);
+    if (progd.open) progd.close();
+  }
+}
+
+/** 重转换指定文档（参数面板改动/预设切换/应用到全部都走这里）。 */
+async function reconvertDoc(doc: EditorDoc): Promise<void> {
+  if (doc.blank) {
+    setStatus(`${doc.name} · 空白画布，不参与转换`);
+    return;
+  }
+  if (doc.presetName === "lineart") {
+    await reconvertDocLineart(doc);
+    return;
+  }
+  if (!doc.src) {
+    setStatus(`${doc.name} · 无源图（会话恢复的上传文件），无法重转换`);
+    return;
+  }
+  if (converting) return;
+  converting = true;
+  setStatus(`转换中… ${doc.name}`);
+  doc._palBefore = doc.paletteBase; // 供重放时做索引重绑（用未变换的原始板）
+  // 进度弹窗（大网格转换数秒，给中央反馈）
+  const progd = document.getElementById("progd") as HTMLDialogElement;
+  const targetSize = getState().size;
+  $("prog-text").textContent = `正在转换 ${doc.name} → ${targetSize}×${targetSize}`;
+  const t0 = performance.now();
+  const progTimer = window.setInterval(() => {
+    $("prog-time").textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  }, 100);
+  if (!progd.open) progd.showModal();
+  try {
+    const { size } = getState();
+    const ov = recipeOverrides(doc.recipe);
+    const r = doc.src.file
+      ? await convertFile(doc.src.file, doc.presetName, size, ov)
+      : await convertPath(doc.src.path!, doc.presetName, size, ov);
+    const fromLineart = !!doc.lineart;
+    const dimsChanged = r.width !== doc.w || r.height !== doc.h;
+    const oldW = doc.w, oldH = doc.h;
+    invalidateBitmaps(doc); // 先失效缓存：updateDoc 触发的重绘按新数据重建
+
+    if (fromLineart) {
+      // 线稿 → 像素画：重建网格图层栈与历史（线稿没有手改可重放）
+      dropLineartImage(doc.id);
+      const canvasLayer = mkLayer("画布层", "canvas");
+      const fileLayer = mkLayer("文件层", "file");
+      updateDoc(doc, {
+        lineart: undefined,
+        name: doc.name,
+        jobId: r.job_id,
+        w: r.width,
+        h: r.height,
+        palette: transformPalette(r.palette, doc.paletteFx),
+        paletteBase: r.palette,
+        fill: Int32Array.from(r.fill.flat()),
+        ink: r.ink ? Int32Array.from(r.ink.flat()) : null,
+        inkVisible: true,
+        inkOpacity: 1,
+        layers: [canvasLayer, fileLayer],
+        activeLayerId: fileLayer.id,
+        baseLayerId: fileLayer.id,
+        sourceUrl: r.source_png ? `data:image/png;base64,${r.source_png}` : "",
+        colorsUsed: r.meta.colors_used,
+        ms: r.meta.grid_ms,
+        history: { undo: [], redo: [] },
+      });
+      doc._palBefore = undefined;
+      setState({ selection: null, colorIndex: 0, zoom: fitZoomFor(r.width, r.height) });
+    } else {
+      updateDoc(doc, {
+        // 尺寸后缀只在首次建档时有意义，重转换后去掉避免名不副实
+        name: dimsChanged ? doc.name.replace(/_\d+$/, "") : doc.name,
+        jobId: r.job_id,
+        w: r.width,
+        h: r.height,
+        palette: transformPalette(r.palette, doc.paletteFx),
+        paletteBase: r.palette,
+        fill: Int32Array.from(r.fill.flat()),
+        ink: r.ink ? Int32Array.from(r.ink.flat()) : null,
+        sourceUrl: r.source_png ? `data:image/png;base64,${r.source_png}` : "",
+        colorsUsed: r.meta.colors_used,
+        ms: r.meta.grid_ms,
+      });
+      if (dimsChanged) {
+        // 网格变了：格号重映射（最近格）后按 OKLab 最近色重绑索引；超界丢弃
+        replayOverrides(doc, oldW, oldH);
+      } else {
+        rebindPalette(doc, r.palette);
+      }
+      if (dimsChanged) setState({ zoom: fitZoomFor(r.width, r.height) });
+    }
+    invalidateBitmaps(doc);
+    cacheSource(r.job_id, r.source_png);
+    redrawCanvas(); // 重放/重绑改动了手改层，收尾再绘一次保证显示与新数据一致
+  } catch (err) {
+    setStatus(`重转换失败 ${doc.name}: ${(err as Error).message}`);
+  } finally {
+    converting = false;
+    window.clearInterval(progTimer);
+    if (progd.open) progd.close();
+  }
+}
+
+/** 参数改动生效：应用到全部开关打开时广播配方并逐个重转换，否则只转当前文档。 */
+async function applyRecipeChange(presetName?: string): Promise<void> {
+  const doc = activeDoc();
+  if (!doc) return;
+  if (!getState().applyAll) {
+    await reconvertDoc(doc);
+    return;
+  }
+  const preset = presetName ?? doc.presetName;
+  const targets = getState().docs.filter((d) => !d.blank && d.src);
+  for (const d of targets) {
+    updateDoc(d, { recipe: { ...doc.recipe }, presetName: preset });
+  }
+  for (const d of targets) await reconvertDoc(d);
+  redrawCanvas();
+  setStatus(`已应用配方到 ${targets.length} 个文档`);
+}
+
+function setStatus(text: string): void {
+  $("stat-doc").textContent = text;
+}
+
+/* ------------------------------------------------ 手改重放（重转换后保手改） *//** 同尺寸重转换：调色板重排了 → 每个层的 override 索引按 OKLab 最近色重绑。 */
+function rebindPalette(doc: import("./store").EditorDoc, newPal: [number, number, number][]): void {
+  const oldPal = doc._palBefore ?? doc.paletteBase; // 无快照（新建画布）时板未变，恒等映射
+  const nearest = (c: [number, number, number]) => {
+    let best = 0, bd = Infinity;
+    for (let k = 0; k < newPal.length; k++) {
+      const p = newPal[k];
+      const dr = c[0] - p[0], dg = c[1] - p[1], db = c[2] - p[2];
+      const d = 0.299 * dr * dr + 0.587 * dg * dg + 0.114 * db * db;
+      if (d < bd) { bd = d; best = k; }
+    }
+    return best;
+  };
+  const remap = new Map<number, number>();
+  oldPal.forEach((c, k) => remap.set(k, nearest(c)));
+  for (const layer of doc.layers) {
+    for (const ov of layer.data.values()) {
+      if (ov.fill !== undefined && ov.fill >= 0) ov.fill = remap.get(ov.fill) ?? 0;
+      if (ov.ink !== undefined && ov.ink >= 0) ov.ink = remap.get(ov.ink) ?? 0;
+    }
+  }
+  doc._palBefore = newPal; // 重绑后 override 语义已对应新板，链式基准前移
+}
+
+/** 跨尺寸重转换：所有层的格号最近格映射（索引重绑交给 rebindPalette）。 */
+function replayOverrides(doc: import("./store").EditorDoc, oldW: number, oldH: number): void {
+  const sx = doc.w / oldW, sy = doc.h / oldH;
+  const conv = (i: number): number => {
+    const x = i % oldW, y = Math.floor(i / oldW);
+    return Math.min(doc.w - 1, Math.floor(x * sx)) + Math.min(doc.h - 1, Math.floor(y * sy)) * doc.w;
+  };
+  for (const layer of doc.layers) {
+    const oldData = new Map(layer.data);
+    layer.data.clear();
+    for (const [i, ov] of oldData) layer.data.set(conv(i), { ...ov });
+  }
+  rebindPalette(doc, doc.paletteBase);
+}
+
+/* ---------------------------------------------------------------- 画布重绘 */
+/** 源图缓存兜底：会话恢复后 jobId 已失效，用文档内嵌缩略图重建缓存。 */
+function ensureSourceCached(doc: EditorDoc): HTMLImageElement | null {
+  const key = sourceKey(doc);
+  const hit = sourceCache.get(key);
+  if (hit || !key || !doc.sourceUrl) return hit ?? null;
+  const img = new Image();
+  img.onload = () => {
+    if (sourceCache.get(key) === img) redrawCanvas();
+  };
+  img.onerror = () => {
+    if (sourceCache.get(key) === img) sourceCache.delete(key);
+  };
+  img.src = doc.sourceUrl;
+  sourceCache.set(key, img);
+  return img;
+}
+
+function redrawCanvas(): void {
+  const doc = activeDoc();
+  const { zoom, showGrid, compare, underlay } = getState();
+  wrap.hidden = !doc;
+  emptyHint.hidden = !!doc;
+  wrap.classList.toggle("tool-hand", getState().tool === "hand");
+  if (!doc) {
+    // 无文档：清掉右侧栏残留（图层/调色板/状态）
+    $("palette").replaceChildren();
+    $("layers").replaceChildren();
+    $("pal-count").textContent = "";
+    $("stat-doc").textContent = "—";
+    $("stat-cursor").textContent = "—";
+    return;
+  }
+  renderView(canvas, doc, {
+    zoom,
+    showGrid,
+    compare,
+    sourceImg: ensureSourceCached(doc),
+    lineartImg: ensureLineartImage(doc),
+    underlay: underlay / 100,
+    selection: getState().selection,
+  });
+  $("zoom-v").textContent = `${Math.round(zoom * 100)}%`;
+  setStatus(
+    doc.lineart
+      ? `${doc.name} · ${doc.w}×${doc.h} px · 线稿 ${doc.lineart.mode.toUpperCase()}${doc.ms ? ` · ${doc.ms}ms` : ""}`
+      : doc.blank
+        ? `${doc.name} · ${doc.w}×${doc.h} · 空白画布 ${doc.colorsUsed} 色`
+        : `${doc.name} · ${doc.w}×${doc.h} · ${doc.colorsUsed} 色 · 网格 ${doc.ms}ms`,
+  );
+}
+
+/* 文档数据被面板就地改动时（图层可见性等） */
+document.addEventListener("doc-changed", () => {
+  const doc = activeDoc();
+  if (doc) invalidateBitmaps(doc);
+  redrawCanvas();
+});
+document.addEventListener("pf:pick-color", ((e: CustomEvent<number>) => {
+  setState({ colorIndex: e.detail });
+}) as EventListener);
+document.addEventListener("pf:undo", () => undo());
+document.addEventListener("pf:redo", () => redo());
+document.addEventListener("pf:status", ((e: CustomEvent<string>) => setStatus(e.detail)) as EventListener);
+document.addEventListener("pf:lib-pick", ((e: CustomEvent<{ rgb: [number, number, number] }>) => {
+  const doc = activeDoc();
+  if (doc) setState({ colorIndex: ensureDocColor(doc, e.detail.rgb) });
+}) as EventListener);
+document.addEventListener("pf:custom-color", ((e: CustomEvent<{ rgb: [number, number, number] }>) => {
+  const rgb = e.detail.rgb;
+  const hex = rgbToHex(rgb);
+  const customs = [hex, ...getState().customColors.filter((c) => c !== hex)].slice(0, 20);
+  setState({ customColors: customs });
+  const doc = activeDoc();
+  if (doc) setState({ colorIndex: ensureDocColor(doc, rgb) });
+}) as EventListener);
+
+/* ------------------------------------------------ M2 绘制交互（指针） */
+let painting = false;   // 铅笔/橡皮拖拽
+let dragging = false;   // 矩形选区框选
+let dragStart: [number, number] | null = null;
+let lastCell: [number, number] | null = null;
+let moveDrag: { downX: number; downY: number; z: number; dx: number; dy: number } | null = null;
+let panDrag: { x: number; y: number; sl: number; st: number } | null = null;
+let spaceTool: string | null = null; // 空格临时手掌前的工具
+let shapeDrag: { kind: "line" | "rect" | "ellipse"; start: [number, number] } | null = null;
+let lastShapeCells: Array<[number, number]> | null = null;
+let lassoDrag = false;  // 磁力套索
+
+function cellFromEvent(e: PointerEvent): [number, number] | null {
+  const doc = activeDoc();
+  if (!doc) return null;
+  const rect = canvas.getBoundingClientRect();
+  const z = rect.width / doc.w;
+  const x = Math.floor((e.clientX - rect.left) / z);
+  const y = Math.floor((e.clientY - rect.top) / z);
+  if (x < 0 || y < 0 || x >= doc.w || y >= doc.h) return null;
+  return [x, y];
+}
+
+function toolValue(): number | "erase" {
+  const { tool } = getState();
+  if (tool === "eraser") return "erase";
+  return getState().colorIndex;
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  const doc = activeDoc();
+  if (!doc || e.button !== 0) return;
+  if (doc.lineart && getState().tool !== "hand") return; // 线稿只读；仅允许手掌平移
+  const cell = cellFromEvent(e);
+  if (!cell) return;
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* 合成事件（非活跃 pointerId） */ }
+  const { tool } = getState();
+  if (tool === "picker") {
+    const i = cell[1] * doc.w + cell[0];
+    const idx = compositeFill(doc, i);
+    if (idx >= 0) setState({ colorIndex: idx });
+    return;
+  }
+  if (tool === "move") {
+    // 位移用按下点的屏幕像素算（画布自身被 transform 移动不影响）——消除"拽着不让走"的顿挫
+    const rect = canvas.getBoundingClientRect();
+    moveDrag = { downX: e.clientX, downY: e.clientY, z: rect.width / doc.w, dx: 0, dy: 0 };
+    return;
+  }
+  if (tool === "hand") {
+    panDrag = { x: e.clientX, y: e.clientY, sl: wrap.scrollLeft, st: wrap.scrollTop };
+    wrap.classList.add("panning");
+    return;
+  }
+  if (tool === "lasso") {
+    lassoDrag = true;
+    setState({ selection: { kind: "poly", cells: new Set(), bounds: {
+      x0: cell[0], y0: cell[1], x1: cell[0], y1: cell[1] }, path: [cell] } });
+    return;
+  }
+  if (tool === "select") {
+    dragStart = cell;
+    setState({ selection: { kind: "rect", rect: {
+      x0: cell[0], y0: cell[1], x1: cell[0], y1: cell[1] } } });
+    dragging = true;
+    return;
+  }
+  if (tool === "bucket") {
+    bucketFill(doc, cell[0], cell[1], "fill", toolValue(), "油漆桶");
+    return;
+  }
+  if (tool === "line" || tool === "rect" || tool === "ellipse") {
+    shapeDrag = { kind: tool, start: cell };
+    lastShapeCells = null;
+    return;
+  }
+  // 铅笔/橡皮：一笔一条历史
+  painting = true;
+  beginStroke(doc);
+  drawStroke(cell, cell);
+  lastCell = cell;
+});
+
+function drawStroke(from: [number, number], to: [number, number]): void {
+  const doc = activeDoc();
+  if (!doc) return;
+  const cells = pixelPerfectLine(from[0], from[1], to[0], to[1])
+    .flatMap(([x, y]) => brushTipCells(x, y, getState().brushSize));
+  const changed = stampCells(doc, cells, "fill", toolValue());
+  if (!changed.length) return;
+  // 实时笔迹：只把变更格补丁进合成位图再重绘（不必整幅重建，提交时才全量刷新）
+  patchBitmapCells(doc, changed);
+  redrawCanvas();
+}
+
+canvas.addEventListener("pointermove", (e) => {
+  const doc = activeDoc();
+  if (!doc) return;
+  if (painting) {
+    const cell = cellFromEvent(e);
+    if (cell && lastCell && (cell[0] !== lastCell[0] || cell[1] !== lastCell[1])) {
+      drawStroke(lastCell, cell);
+      lastCell = cell;
+    }
+  } else if (dragging && dragStart) {
+    const cell = cellFromEvent(e);
+    if (cell) setState({ selection: { kind: "rect", rect: {
+      x0: Math.min(dragStart[0], cell[0]), y0: Math.min(dragStart[1], cell[1]),
+      x1: Math.max(dragStart[0], cell[0]), y1: Math.max(dragStart[1], cell[1]) } } });
+  } else if (moveDrag) {
+    moveDrag.dx = Math.round((e.clientX - moveDrag.downX) / moveDrag.z);
+    moveDrag.dy = Math.round((e.clientY - moveDrag.downY) / moveDrag.z);
+    canvas.style.transform = `translate(${moveDrag.dx * moveDrag.z}px, ${moveDrag.dy * moveDrag.z}px)`;
+  } else if (panDrag) {
+    wrap.scrollLeft = panDrag.sl - (e.clientX - panDrag.x);
+    wrap.scrollTop = panDrag.st - (e.clientY - panDrag.y);
+  } else if (shapeDrag) {
+    const cell = cellFromEvent(e);
+    if (cell) {
+      lastShapeCells = shapeCells(shapeDrag.kind, shapeDrag.start[0], shapeDrag.start[1], cell[0], cell[1], e.shiftKey);
+      shapePreviewApply(doc, lastShapeCells, "fill", getState().colorIndex);
+    }
+  } else if (lassoDrag) {
+    const raw = cellFromEvent(e);
+    if (!raw) return;
+    const sel = getState().selection;
+    if (sel?.kind !== "poly") return;
+    const [sx, sy] = magneticSnap(doc, raw[0], raw[1]);
+    const last = sel.path[sel.path.length - 1];
+    if (last && last[0] === sx && last[1] === sy) return;
+    // 相邻吸附点之间插值，保证多边形连续（否则长跳会切角漏掉内部）
+    const seg: Array<[number, number]> = last
+      ? plainLineBetween(last, [sx, sy]).slice(1)
+      : [[sx, sy]];
+    if (!seg.length) return;
+    const path: Array<[number, number]> = [...sel.path, ...seg];
+    setState({ selection: {
+      kind: "poly", cells: new Set(),
+      bounds: {
+        x0: Math.max(0, Math.min(...path.map((p) => p[0]))),
+        y0: Math.max(0, Math.min(...path.map((p) => p[1]))),
+        x1: Math.min(doc.w - 1, Math.max(...path.map((p) => p[0]))),
+        y1: Math.min(doc.h - 1, Math.max(...path.map((p) => p[1]))),
+      },
+      path,
+    } });
+  }
+});
+
+const endPointer = (e: PointerEvent) => {
+  const doc = activeDoc();
+  if (painting && doc) {
+    endStroke(doc, getState().tool === "eraser" ? "橡皮" : "铅笔");
+  }
+  if (dragging && dragStart && doc) {
+    const cell = cellFromEvent(e);
+    // 单击未拖动 = 取消选区（PS 习惯）
+    if (cell && cell[0] === dragStart[0] && cell[1] === dragStart[1]) {
+      setState({ selection: null });
+    }
+  }
+  if (moveDrag && doc) {
+    canvas.style.transform = "";
+    const ok = finishMove(doc, moveDrag.dx, moveDrag.dy);
+    if (!ok) setStatus("当前层没有可移动的手改内容（或位移为 0）");
+  }
+  if (panDrag) {
+    wrap.classList.remove("panning");
+  }
+  if (shapeDrag && doc) {
+    shapePreviewEnd(doc);
+    if (lastShapeCells && lastShapeCells.length) {
+      paintCells(doc, lastShapeCells, "fill", toolValue(),
+        `${shapeDrag.kind === "line" ? "直线" : shapeDrag.kind === "rect" ? "矩形" : "椭圆"}${e.shiftKey ? "(填充)" : ""}`);
+    }
+    lastShapeCells = null;
+  }
+  if (lassoDrag && doc) {
+    const sel = getState().selection;
+    if (sel?.kind === "poly") {
+      if (sel.path.length >= 4) {
+        const { cells, bounds } = polygonCells(doc, sel.path);
+        if (cells.size) setState({ selection: { kind: "poly", cells, bounds, path: sel.path } });
+        else setState({ selection: null });
+      } else {
+        setState({ selection: null }); // 单击未圈选 = 取消
+      }
+    }
+  }
+  painting = false; dragging = false; dragStart = null; lastCell = null;
+  moveDrag = null; shapeDrag = null; lassoDrag = false; panDrag = null;
+};
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", () => {
+  const doc = activeDoc();
+  if (shapeDrag && doc) shapePreviewEnd(doc); // 取消时不落历史
+  painting = false; dragging = false; dragStart = null; lastCell = null;
+  moveDrag = null; shapeDrag = null; lassoDrag = false; panDrag = null;
+  canvas.style.transform = "";
+  wrap.classList.remove("panning");
+});
+
+/* 空格 = 临时手掌（PS 习惯）。任何空格 keydown/keyup 一律 preventDefault，
+ * 否则按住时的重复 keydown 会触发浏览器默认滚动（首次 preventDefault 拦不住 repeats） */
+document.addEventListener("keydown", (e) => {
+  if (e.code !== "Space") return;
+  const tag = (e.target as HTMLElement)?.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+  e.preventDefault();
+  if (e.repeat || spaceTool) return;
+  const t = getState().tool;
+  if (t === "hand") return;
+  spaceTool = t;
+  setState({ tool: "hand" });
+});
+document.addEventListener("keyup", (e) => {
+  if (e.code !== "Space") return;
+  const tag = (e.target as HTMLElement)?.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+  e.preventDefault();
+  if (!spaceTool) return;
+  setState({ tool: spaceTool as never });
+  spaceTool = null;
+});
+
+/* 选区快捷操作：方向键移动 / Shift+方向键复制 / H·V 翻转 / Esc 取消 */
+document.addEventListener("keydown", (e) => {
+  const doc = activeDoc();
+  if (!doc) return;
+  const tag = (e.target as HTMLElement)?.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    e.shiftKey ? redo() : undo();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+    e.preventDefault();
+    redo();
+    return;
+  }
+  if (e.ctrlKey || e.metaKey) return;
+  const { selection } = getState();
+  const k = e.key.toLowerCase();
+  const toolKeys: Record<string, string> = {
+    b: "pencil", e: "eraser", g: "bucket", i: "picker", s: "select",
+    v: "move", q: "lasso", l: "line", r: "rect", o: "ellipse", h: "hand",
+  };
+  if (!selection && toolKeys[k]) { setState({ tool: toolKeys[k] as never }); return; }
+  if (k === "m") { // 对称循环：关→H→V→四分
+    const order = ["off", "h", "v", "quad"] as const;
+    const cur = order.indexOf(getState().symmetry);
+    setState({ symmetry: order[(cur + 1) % 4] });
+    return;
+  }
+  if (e.key === "Escape") { setState({ selection: null }); return; }
+  if (selection) {
+    const dirs: Record<string, [number, number]> = {
+      arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, -1], arrowdown: [0, 1],
+    };
+    const d = dirs[k];
+    if (d) {
+      e.preventDefault();
+      moveSelectionBy(doc, d[0], d[1], e.shiftKey);
+    } else if (k === "h") {
+      if (!flipSelection(doc, "h")) setStatus("翻转仅支持矩形选区");
+    } else if (k === "v") {
+      if (!flipSelection(doc, "v")) setStatus("翻转仅支持矩形选区");
+    }
+  }
+});
+
+/* ------------------------------------------------ 导出对话框（批量/格式/倍率/预览） */
+
+/** 文档像素合成（多图层栈+墨线）。transparent=true 时边缘泛洪去底色（轮廓外 alpha=0）。 */
+function composeDocCanvas(doc: import("./store").EditorDoc, transparent = false): HTMLCanvasElement {
+  return compositeDoc(doc, { transparent });
+}
+
+const expdlg = $("exportdlg") as HTMLDialogElement;
+let expPreviewId: string | null = null;
+let expZoom = 4;
+
+/** 导出内容：像素画合成 / 引擎线稿（源图提取）/ 像素墨线层。 */
+type ExpContent = "composite" | "engine" | "ink";
+function expContent(): ExpContent {
+  const v = ($("exp-content") as HTMLSelectElement)?.value;
+  return v === "engine" || v === "ink" ? v : "composite";
+}
+
+/** 引擎线稿缓存（key = doc.id:jobId）与在途请求，避免重复提取。 */
+const lineartCache = new Map<string, HTMLImageElement>();
+const lineartPending = new Map<string, Promise<HTMLImageElement | null>>();
+
+function lineartKey(doc: import("./store").EditorDoc): string {
+  return `${doc.id}:${doc.jobId}`;
+}
+
+/** 取该文档的引擎线稿（上传原图 / 按服务器路径提取；空白画布返回 null）。 */
+function loadEngineLineart(doc: import("./store").EditorDoc): Promise<HTMLImageElement | null> {
+  const key = lineartKey(doc);
+  if (doc.lineart) {
+    // 线稿文档已持有源分辨率图，直接返回当前资产（不读旧缓存，避免重提取后导出旧图）
+    const img = ensureLineartImage(doc);
+    if (!img) return Promise.resolve(null);
+    if (img.complete && img.naturalWidth) return Promise.resolve(img);
+    return new Promise((resolve) => {
+      img.addEventListener("load", () => resolve(img.naturalWidth ? img : null), { once: true });
+      img.addEventListener("error", () => resolve(null), { once: true });
+    });
+  }
+  const hit = lineartCache.get(key);
+  if (hit) return Promise.resolve(hit);
+  const pending = lineartPending.get(key);
+  if (pending) return pending;
+  const job = (async (): Promise<HTMLImageElement | null> => {
+    try {
+      let png: string | null = null;
+      if (doc.src?.file) png = (await extractLineartFile(doc.src.file)).png;
+      else if (doc.src?.path) png = (await extractLineartPath(doc.src.path)).png;
+      if (!png) return null;
+      const img = new Image();
+      await new Promise<void>((res) => {
+        img.onload = () => res();
+        img.onerror = () => res();
+        img.src = `data:image/png;base64,${png}`;
+        if (img.complete && img.naturalWidth) res();
+      });
+      if (!img.naturalWidth) return null;
+      lineartCache.set(key, img);
+      return img;
+    } catch (err) {
+      setStatus(`线稿提取失败 ${doc.name}: ${(err as Error).message}`);
+      return null;
+    } finally {
+      lineartPending.delete(key);
+    }
+  })();
+  lineartPending.set(key, job);
+  return job;
+}
+
+/** 按内容模式生成预览/导出源（合成/像素墨线）；引擎线稿走独立异步路径。 */
+function expSource(doc: import("./store").EditorDoc): HTMLCanvasElement | null {
+  if (doc.lineart) return null; // 线稿文档没有像素网格合成，导出走引擎线稿路径
+  if (expContent() === "ink") return compositeLineart(doc);
+  return composeDocCanvas(doc, expTransparent());
+}
+
+/** 导出文件名：模板为空=自动（名称_输出尺寸）；{name}/{size}/{preset} 由调用方给后缀。 */
+function expNameWithSuffix(doc: import("./store").EditorDoc, autoSuffix: string): string {
+  const name = doc.name.replace(/[\\/:*?"<>|]/g, "_");
+  const tpl = ($("exp-name") as HTMLSelectElement).value;
+  if (tpl === "auto") return `${name}${autoSuffix}`;
+  return tpl
+    .replace("{name}", name)
+    .replace("{size}", String(doc.w))
+    .replace("{preset}", doc.presetName);
+}
+
+/** 线稿模式固定 PNG；引擎线稿按源图原始分辨率，尺寸选项灰显；图集仅网格内容可用。 */
+function expApplyContentUI(): void {
+  const c = expContent();
+  const fmt = $("exp-format") as HTMLSelectElement;
+  const trans = $("exp-trans") as HTMLInputElement;
+  const previewDoc = getState().docs.find((d) => d.id === expPreviewId);
+  const lineartDoc = !!previewDoc?.lineart; // 线稿文档固定源分辨率 PNG
+  const lockFormat = c !== "composite" || lineartDoc;
+  fmt.disabled = lockFormat;
+  trans.disabled = lockFormat;
+  if (lockFormat) {
+    fmt.value = "png";
+    trans.checked = false;
+  }
+  $("exp-trans-row").classList.toggle("off", lockFormat || fmt.value === "jpeg");
+  const rawRes = c === "engine" || lineartDoc;
+  ($("exp-scale") as HTMLSelectElement).disabled = rawRes;
+  ($("exp-w") as HTMLInputElement).disabled = rawRes;
+  ($("exp-h") as HTMLInputElement).disabled = rawRes;
+  const sheet = $("exp-sheet") as HTMLInputElement;
+  sheet.disabled = rawRes;
+  if (rawRes) sheet.checked = false;
+  $("exp-sheet-row").classList.toggle("off", rawRes);
+}
+
+function expCheckedIds(): string[] {
+  return [...expdlg.querySelectorAll<HTMLInputElement>("#exp-docs input:checked")].map((i) => i.dataset.id!);
+}
+
+function expUpdateDims(): void {
+  const doc = getState().docs.find((d) => d.id === expPreviewId);
+  if (!doc) return;
+  if (doc.lineart) {
+    ($("exp-w") as HTMLInputElement).value = String(doc.lineart.width);
+    ($("exp-h") as HTMLInputElement).value = String(doc.lineart.height);
+    return;
+  }
+  const scale = Number(($("exp-scale") as HTMLSelectElement).value) || 1;
+  ($("exp-w") as HTMLInputElement).value = String(doc.w * scale);
+  ($("exp-h") as HTMLInputElement).value = String(doc.h * scale);
+}
+
+function expRenderPreview(): void {
+  const doc = getState().docs.find((d) => d.id === expPreviewId);
+  const cv = $("exp-canvas") as HTMLCanvasElement;
+  const pname = $("exp-pname") as HTMLElement;
+  if (!doc) {
+    cv.width = cv.height = 1;
+    pname.textContent = "（无文档）";
+    return;
+  }
+  const content = expContent();
+  if (doc.lineart) {
+    // 线稿文档：直接预览源分辨率图（无需再提取）
+    const img = ensureLineartImage(doc);
+    if (!img || !img.complete || !img.naturalWidth) {
+      cv.width = cv.height = 1;
+      cv.style.width = cv.style.height = "1px";
+      pname.textContent = `${doc.name} · 线稿加载中…`;
+      $("exp-zoomv").textContent = "—";
+      img?.addEventListener("load", () => {
+        if (expPreviewId === doc.id) {
+          expFitZoom();
+          expRenderPreview();
+        }
+      }, { once: true });
+      return;
+    }
+    cv.width = img.naturalWidth;
+    cv.height = img.naturalHeight;
+    cv.getContext("2d")!.drawImage(img, 0, 0);
+    cv.style.imageRendering = "auto"; // 连续图像平滑缩放，不像素化
+    cv.style.width = `${Math.max(1, Math.round(img.naturalWidth * expZoom))}px`;
+    cv.style.height = `${Math.max(1, Math.round(img.naturalHeight * expZoom))}px`;
+    pname.textContent = `${doc.name} · 线稿 ${img.naturalWidth}×${img.naturalHeight}`;
+    $("exp-zoomv").textContent = `${Math.round(expZoom * 100)}%`;
+    return;
+  }
+  if (content === "engine") {
+    const img = lineartCache.get(lineartKey(doc));
+    if (!img) {
+      // 未就绪：清空并异步提取，完成后若仍是当前预览则重绘
+      cv.width = cv.height = 1;
+      cv.style.width = cv.style.height = "1px";
+      pname.textContent = doc.src ? `${doc.name} · 线稿提取中…` : `${doc.name} · 无源图（空白画布）`;
+      $("exp-zoomv").textContent = "—";
+      if (doc.src) {
+        void loadEngineLineart(doc).then(() => {
+          if (expPreviewId === doc.id) {
+            expFitZoom();
+            expRenderPreview();
+          }
+        });
+      }
+      return;
+    }
+    cv.width = img.naturalWidth;
+    cv.height = img.naturalHeight;
+    cv.getContext("2d")!.drawImage(img, 0, 0);
+    cv.style.imageRendering = "auto"; // 连续图像平滑缩放，不像素化
+    cv.style.width = `${Math.max(1, Math.round(img.naturalWidth * expZoom))}px`;
+    cv.style.height = `${Math.max(1, Math.round(img.naturalHeight * expZoom))}px`;
+    pname.textContent = `${doc.name} · 引擎线稿 ${img.naturalWidth}×${img.naturalHeight}`;
+    $("exp-zoomv").textContent = `${Math.round(expZoom * 100)}%`;
+    return;
+  }
+  const src = expSource(doc);
+  if (!src) {
+    // 像素墨线层为空：清空预览并提示
+    cv.width = cv.height = 1;
+    cv.style.width = cv.style.height = "1px";
+    pname.textContent = `${doc.name} · 无墨线可预览`;
+    $("exp-zoomv").textContent = "—";
+    return;
+  }
+  cv.width = doc.w;
+  cv.height = doc.h;
+  cv.getContext("2d")!.drawImage(src, 0, 0);
+  cv.style.imageRendering = ""; // 恢复 CSS 的像素化预览
+  cv.style.width = `${Math.max(1, Math.round(doc.w * expZoom))}px`;
+  cv.style.height = `${Math.max(1, Math.round(doc.h * expZoom))}px`;
+  pname.textContent = doc.name + (content === "ink" ? " · 像素墨线层" : "");
+  $("exp-zoomv").textContent = `${Math.round(expZoom * 100)}%`;
+}
+
+function openExport(): void {
+  const { docs, activeIndex } = getState();
+  const list = $("exp-docs");
+  list.textContent = "";
+  for (const d of docs) {
+    const row = document.createElement("label");
+    row.className = "pf-exp-row" + (d.id === expPreviewId ? " cur" : "");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    cb.dataset.id = d.id;
+    const name = document.createElement("span");
+    name.textContent = d.name;
+    const dims = document.createElement("span");
+    dims.className = "pf-val";
+    dims.textContent = d.lineart ? `${d.w}×${d.h} 线稿` : `${d.w}×${d.h}`;
+    row.append(cb, name, dims);
+    row.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).tagName === "INPUT") return;
+      expPreviewId = d.id;
+      if (d.lineart) ($("exp-content") as HTMLSelectElement).value = "engine";
+      expApplyContentUI();
+      expFitZoom();
+      expRenderPreview();
+      expUpdateDims();
+      list.querySelectorAll(".pf-exp-row").forEach((r) => r.classList.remove("cur"));
+      row.classList.add("cur");
+    });
+    list.appendChild(row);
+  }
+  expPreviewId = docs[activeIndex]?.id ?? docs[0]?.id ?? null;
+  const previewDoc = docs.find((d) => d.id === expPreviewId);
+  // 打开时按当前文档类型对齐内容选项：线稿文档默认清晰线稿，像素文档回到合成
+  ($("exp-content") as HTMLSelectElement).value = previewDoc?.lineart ? "engine" : "composite";
+  expdlg.showModal();
+  expApplyContentUI();
+  // 弹窗布局完成后（flex 尺寸就绪）再做预览适配
+  requestAnimationFrame(() => {
+    expFitZoom();
+    expRenderPreview();
+  });
+  expRenderPreview();
+  expUpdateDims();
+}
+
+/** 预览缩放适配预览框（引擎线稿按其原始分辨率算）。 */
+function expFitZoom(): void {
+  const doc = getState().docs.find((d) => d.id === expPreviewId);
+  if (!doc) { expZoom = 1; return; }
+  let w = doc.w, h = doc.h;
+  if (doc.lineart) {
+    w = doc.lineart.width;
+    h = doc.lineart.height;
+  } else if (expContent() === "engine") {
+    const img = lineartCache.get(lineartKey(doc));
+    if (img) { w = img.naturalWidth; h = img.naturalHeight; }
+  }
+  const stage = document.querySelector(".pf-export-stage") as HTMLElement;
+  const zw = (stage.clientWidth - 40) / w;
+  const zh = (stage.clientHeight - 40) / h;
+  expZoom = Math.max(0.05, Math.min(16, zw, zh));
+}
+
+$("export").addEventListener("click", openExport);
+$("exp-cancel").addEventListener("click", () => expdlg.close());
+document.getElementById("exp-all")?.addEventListener("change", (e) => {
+  const on = (e.target as HTMLInputElement).checked;
+  expdlg.querySelectorAll<HTMLInputElement>("#exp-docs input").forEach((i) => { i.checked = on; });
+});
+$("exp-zoomin").addEventListener("click", () => { expZoom = Math.min(16, expZoom * 1.25); expRenderPreview(); });
+$("exp-zoomout").addEventListener("click", () => { expZoom = Math.max(0.05, expZoom / 1.25); expRenderPreview(); });
+$("exp-scale").addEventListener("change", expUpdateDims);
+$("exp-content").addEventListener("change", () => {
+  expApplyContentUI();
+  expFitZoom();
+  expRenderPreview();
+});
+/* JPEG 无透明：禁用复选框并强制取消勾选 */
+$("exp-format").addEventListener("change", () => {
+  const jpeg = ($("exp-format") as HTMLSelectElement).value === "jpeg";
+  const row = $("exp-trans-row");
+  row.classList.toggle("off", jpeg);
+  if (jpeg) ($("exp-trans") as HTMLInputElement).checked = false;
+});
+function expTransparent(): boolean {
+  return ($("exp-trans") as HTMLInputElement).checked
+    && ($("exp-format") as HTMLSelectElement).value !== "jpeg";
+}
+$("exp-trans").addEventListener("change", () => expRenderPreview());
+($("exp-w") as HTMLInputElement).addEventListener("change", () => {
+  const doc = getState().docs.find((d) => d.id === expPreviewId);
+  if (!doc || doc.lineart) return;
+  const w = Math.max(1, Math.round(Number(($("exp-w") as HTMLInputElement).value) || doc.w));
+  const scale = Math.max(0.01, Math.min(16, w / doc.w));
+  ($("exp-scale") as HTMLSelectElement).value = String([1, 2, 4, 8, 16].includes(Math.round(scale)) ? Math.round(scale) : scale.toFixed(2));
+  ($("exp-w") as HTMLInputElement).value = String(Math.round(doc.w * scale));
+  ($("exp-h") as HTMLInputElement).value = String(Math.round(doc.h * scale));
+});
+($("exp-h") as HTMLInputElement).addEventListener("change", () => {
+  const doc = getState().docs.find((d) => d.id === expPreviewId);
+  if (!doc || doc.lineart) return;
+  const h = Math.max(1, Math.round(Number(($("exp-h") as HTMLInputElement).value) || doc.h));
+  const scale = Math.max(0.01, Math.min(16, h / doc.h));
+  ($("exp-w") as HTMLInputElement).value = String(Math.round(doc.w * scale));
+  ($("exp-h") as HTMLInputElement).value = String(Math.round(doc.h * scale));
+});
+$("exp-ok").addEventListener("click", async () => {
+  const ids = expCheckedIds();
+  if (!ids.length) { setStatus("尚未勾选任何文档"); return; }
+  const content = expContent();
+
+  // 引擎线稿：按源图原始分辨率导出（不做缩放）
+  if (content === "engine") {
+    let n = 0;
+    let skipped = 0;
+    for (const id of ids) {
+      const doc = getState().docs.find((d) => d.id === id);
+      if (!doc?.src && !doc?.lineart) { skipped++; continue; }
+      const img = await loadEngineLineart(doc);
+      if (!img) { skipped++; continue; }
+      const a = document.createElement("a");
+      a.download = `${expNameWithSuffix(doc, "_lineart")}.png`;
+      a.href = img.src;
+      a.click();
+      n++;
+      if (ids.length > 1) await new Promise((r) => setTimeout(r, 250));
+    }
+    expdlg.close();
+    if (!n && skipped) { setStatus(`未导出任何线稿 · 跳过 ${skipped} 个无源图文档`); return; }
+    setStatus(`已导出 ${n} 个引擎线稿（原始分辨率）${skipped ? ` · 跳过 ${skipped} 个无源图文档` : ""}`);
+    return;
+  }
+
+  const lineart = content === "ink";
+  const scale = Number(($("exp-scale") as HTMLSelectElement).value) || 1;
+  const format = lineart ? "png" : ($("exp-format") as HTMLSelectElement).value;
+  const transparent = !lineart && expTransparent();
+  const mime = format === "jpeg" ? "image/jpeg" : format === "webp" ? "image/webp" : "image/png";
+  const ext = format === "jpeg" ? "jpg" : format;
+
+  // 精灵图集：按尺寸分组，每组同尺寸文档水平拼成一条（一个文件）
+  if (($("exp-sheet") as HTMLInputElement).checked) {
+    const picked = ids
+      .map((id) => getState().docs.find((d) => d.id === id))
+      .filter((d): d is import("./store").EditorDoc => !!d);
+    const groups = new Map<string, import("./store").EditorDoc[]>();
+    for (const d of picked) {
+      const key = `${d.w}x${d.h}`;
+      const list = groups.get(key);
+      if (list) list.push(d); else groups.set(key, [d]);
+    }
+    let files = 0, merged = 0, skipped = 0;
+    for (const group of groups.values()) {
+      const w = group[0].w, h = group[0].h;
+      const cellW = Math.round(w * scale), cellH = Math.round(h * scale);
+      const sources = group
+        .map((doc) => ({ doc, src: expSource(doc) }))
+        .filter((x): x is { doc: import("./store").EditorDoc; src: HTMLCanvasElement } => !!x.src);
+      if (!sources.length) { skipped += group.length; continue; }
+      const out = document.createElement("canvas");
+      out.width = cellW * sources.length;
+      out.height = cellH;
+      const ctx = out.getContext("2d")!;
+      ctx.imageSmoothingEnabled = false;
+      if (format === "jpeg") { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, out.width, out.height); }
+      sources.forEach(({ src }, k) => ctx.drawImage(src, k * cellW, 0, cellW, cellH));
+      const a = document.createElement("a");
+      a.download = `spritesheet_${w}x${h}_${sources.length}${lineart ? "_ink" : ""}.${ext}`;
+      a.href = out.toDataURL(mime);
+      a.click();
+      files++;
+      merged += sources.length;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    expdlg.close();
+    const skipMsg = skipped ? ` · 跳过 ${skipped} 个无${lineart ? "墨线" : "源"}文档` : "";
+    if (!files) { setStatus(`未导出任何图集${skipMsg}`); return; }
+    setStatus(`已导出 ${files} 张图集（合并 ${merged} 个文档，按尺寸分组）${skipMsg}`);
+    return;
+  }
+
+  let n = 0;
+  let skipped = 0;
+  let lineartSkipped = 0;
+  for (const id of ids) {
+    const doc = getState().docs.find((d) => d.id === id);
+    if (!doc) continue;
+    if (doc.lineart) { lineartSkipped++; continue; } // 线稿文档请选「线稿（引擎提取）」内容
+    const src = expSource(doc);
+    if (!src) { skipped++; continue; } // 像素墨线层为空
+    const out = document.createElement("canvas");
+    out.width = Math.round(doc.w * scale);
+    out.height = Math.round(doc.h * scale);
+    const ctx = out.getContext("2d")!;
+    ctx.imageSmoothingEnabled = false;
+    if (format === "jpeg") { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, out.width, out.height); }
+    ctx.drawImage(src, 0, 0, out.width, out.height);
+    const a = document.createElement("a");
+    a.download = `${expNameWithSuffix(doc, `_${out.width}px${lineart ? "_ink" : ""}`)}.${ext}`;
+    a.href = out.toDataURL(mime);
+    a.click();
+    n++;
+    if (ids.length > 1) await new Promise((r) => setTimeout(r, 250)); // 多文件下载间隔
+  }
+  expdlg.close();
+  const skipParts: string[] = [];
+  if (skipped) skipParts.push(`${skipped} 个无${lineart ? "墨线" : "源"}文档`);
+  if (lineartSkipped) skipParts.push(`${lineartSkipped} 个线稿文档需选「线稿（引擎提取）」内容`);
+  const skipMsg = skipParts.length ? ` · 跳过 ${skipParts.join("；")}` : "";
+  if (!n && skipParts.length) { setStatus(`未导出任何文件${skipMsg}`); return; }
+  setStatus(lineart
+    ? `已导出 ${n} 个像素墨线层（PNG ${Math.round(scale * 100)}%）${skipMsg}`
+    : `已导出 ${n} 个文件（${format.toUpperCase()} ${Math.round(scale * 100)}%${transparent ? " · 透明" : ""}）${skipMsg}`);
+});
+
+/* 进度弹窗不可手动关闭 */
+($("progd") as HTMLDialogElement).addEventListener("cancel", (e) => e.preventDefault());
+
+subscribe(redrawCanvas);
+
+/* ---------------------------------------------------------------- 控件 */
+$("open").addEventListener("click", () => $("file-input").click());
+$("open-folder").addEventListener("click", () => $("folder-input").click());
+$("preset").addEventListener("change", (e) => {
+  const preset = (e.target as HTMLSelectElement).value;
+  setState({ preset });
+  const doc = activeDoc();
+  if (doc && !doc.blank) updateDoc(doc, { presetName: preset, recipe: presetRecipe(preset) });
+  void applyRecipeChange(preset);
+});
+$("size").addEventListener("change", (e) => {
+  setState({ size: Number((e.target as HTMLSelectElement).value) });
+  void applyRecipeChange();
+});
+
+/* ------------------------------------------------ 参数面板（M3，每文档配方） */
+const rpRanges: Array<[string, keyof RecipeParams, (v: number) => string]> = [
+  ["rp-edge", "edge", (v) => v.toFixed(1)],
+  ["rp-dark", "dark", (v) => v.toFixed(1)],
+  ["rp-contrast", "contrast", (v) => v.toFixed(2)],
+  ["rp-soft", "softRatio", (v) => v.toFixed(2)],
+  ["rp-merge", "mergeDelta", (v) => v.toFixed(2)],
+  ["rp-maxcolors", "maxColors", (v) => String(Math.round(v))],
+];
+let recipeTimer = 0;
+let lastSyncedDocId: string | null = null;
+
+function patchRecipe(patch: Partial<RecipeParams>): void {
+  const doc = activeDoc();
+  if (!doc || doc.blank) return;
+  updateDoc(doc, { recipe: { ...doc.recipe, ...patch } });
+}
+
+/** 滑杆改动 300ms 防抖后统一重转换（避免拖动过程打爆引擎）。 */
+function scheduleRecipeApply(): void {
+  window.clearTimeout(recipeTimer);
+  recipeTimer = window.setTimeout(() => void applyRecipeChange(), 300);
+}
+
+/** 参数面板回显：活动文档切换时同步配方、预设与尺寸下拉。 */
+function syncRecipeUI(): void {
+  const doc = activeDoc();
+  const useDoc = doc && !doc.blank ? doc : null; // 空白画布用全局预设（不随文档配方）
+  const r = useDoc?.recipe ?? presetRecipe(getState().preset);
+  // 切换标签：把全局预设/尺寸对齐该文档，避免下一次操作误用旧值
+  if (useDoc && useDoc.id !== lastSyncedDocId) {
+    lastSyncedDocId = useDoc.id;
+    if (getState().preset !== useDoc.presetName) setState({ preset: useDoc.presetName });
+    const sizeSel = $("size") as HTMLSelectElement;
+    if (useDoc.w !== getState().size && [...sizeSel.options].some((o) => Number(o.value) === useDoc.w)) {
+      setState({ size: useDoc.w });
+    }
+  }
+  ($("preset") as HTMLSelectElement).value = useDoc?.presetName ?? getState().preset;
+
+  for (const [id, key, fmt] of rpRanges) {
+    const el = $(id) as HTMLInputElement;
+    const v = Number(r[key]);
+    el.value = String(v);
+    $(`${id}-v`).textContent = fmt(v);
+  }
+  ($("rp-pal") as HTMLSelectElement).value =
+    r.paletteSource === "extract" ? "extract" : `builtin:${r.paletteRef}`;
+  ($("rp-lineart") as HTMLSelectElement).value = r.lineart;
+  ($("rp-ink") as HTMLInputElement).checked = r.ink;
+  ($("rp-all") as HTMLInputElement).checked = getState().applyAll;
+  $("rp-scope").textContent = getState().applyAll ? "全部标签" : "仅当前文档";
+
+  const off = !doc || !!doc.blank || !!doc.lineart;
+  for (const [id] of rpRanges) ($(id) as HTMLInputElement).disabled = off;
+  ($("rp-pal") as HTMLSelectElement).disabled = off;
+  ($("rp-lineart") as HTMLSelectElement).disabled = off;
+  ($("rp-ink") as HTMLInputElement).disabled = off;
+  ($("rp-maxcolors") as HTMLInputElement).disabled = off || r.paletteSource !== "extract";
+}
+
+/** 线稿文档/线稿预设的界面模式：隐藏像素尺寸、参数、编辑工具与像素面板。 */
+function syncDocModeUI(): void {
+  const doc = activeDoc();
+  const lineartDoc = !!doc?.lineart;
+  const lineartPreset = getState().preset === "lineart";
+  $("size-field").hidden = lineartPreset || lineartDoc;
+  $("params").hidden = lineartPreset || lineartDoc;
+  $("tools-card").hidden = lineartDoc;
+  $("pixel-panels").hidden = lineartDoc;
+  $("lineart-panels").hidden = !lineartDoc;
+  $("grid").hidden = lineartDoc;
+  $("underlay-wrap").hidden = lineartDoc;
+  $("mode-note").textContent = lineartPreset || lineartDoc
+    ? "线稿模式：按源图分辨率清晰提取，不使用像素网格与尺寸。"
+    : "改动即时重转换当前文档；空白画布不受影响。";
+  if (doc?.lineart) {
+    $("la-dims").textContent = `${doc.w}×${doc.h} px · ${doc.lineart.mode.toUpperCase()}`;
+  }
+  if (lineartDoc && getState().selection) setState({ selection: null });
+}
+
+for (const [id, key, fmt] of rpRanges) {
+  const el = $(id) as HTMLInputElement;
+  el.addEventListener("input", () => {
+    const v = Number(el.value);
+    $(`${id}-v`).textContent = fmt(v);
+    patchRecipe({ [key]: v } as Partial<RecipeParams>);
+    scheduleRecipeApply();
+  });
+}
+$("rp-pal").addEventListener("change", (e) => {
+  const v = (e.target as HTMLSelectElement).value;
+  if (v === "extract") patchRecipe({ paletteSource: "extract" });
+  else patchRecipe({ paletteSource: "builtin", paletteRef: v.split(":")[1] ?? "gameboy" });
+  void applyRecipeChange();
+});
+$("rp-lineart").addEventListener("change", (e) => {
+  patchRecipe({ lineart: (e.target as HTMLSelectElement).value as RecipeParams["lineart"] });
+  void applyRecipeChange();
+});
+$("rp-ink").addEventListener("change", (e) => {
+  patchRecipe({ ink: (e.target as HTMLInputElement).checked });
+  void applyRecipeChange();
+});
+$("rp-all").addEventListener("change", (e) => {
+  const v = (e.target as HTMLInputElement).checked;
+  setState({ applyAll: v });
+  setStatus(v ? "参数改动将应用到全部标签" : "参数改动仅作用于当前文档");
+});
+subscribe(syncRecipeUI);
+subscribe(syncDocModeUI);
+syncRecipeUI();
+syncDocModeUI();
+
+/* ------------------------------------------------ 色板变换（M3，改板不改画） */
+function syncPaletteFxUI(): void {
+  const doc = activeDoc();
+  const fx = doc?.paletteFx ?? ZERO_PALETTE_FX;
+  const light = Math.round(fx.lightness * 100);
+  const hue = Math.round(fx.hue);
+  const sat = Math.round(fx.saturation * 100);
+  ($("pfx-light") as HTMLInputElement).value = String(light);
+  ($("pfx-hue") as HTMLInputElement).value = String(hue);
+  ($("pfx-sat") as HTMLInputElement).value = String(sat);
+  $("pfx-light-v").textContent = String(light);
+  $("pfx-hue-v").textContent = `${hue}°`;
+  $("pfx-sat-v").textContent = String(sat);
+  $("pfx-v").textContent = light || hue || sat ? "已变换" : "原色";
+  const off = !doc;
+  for (const id of ["pfx-light", "pfx-hue", "pfx-sat", "pfx-reset"]) {
+    ($(id) as HTMLInputElement).disabled = off;
+  }
+}
+
+/** 整板重生成：只改 doc.palette，格子/手改索引一律不动。 */
+function applyPaletteFx(patch: Partial<PaletteFx>): void {
+  const doc = activeDoc();
+  if (!doc) return;
+  const fx: PaletteFx = { ...(doc.paletteFx ?? ZERO_PALETTE_FX), ...patch };
+  invalidateBitmaps(doc);
+  updateDoc(doc, { paletteFx: fx, palette: transformPalette(doc.paletteBase, fx) });
+}
+$("pfx-light").addEventListener("input", (e) => {
+  applyPaletteFx({ lightness: Number((e.target as HTMLInputElement).value) / 100 });
+});
+$("pfx-hue").addEventListener("input", (e) => {
+  applyPaletteFx({ hue: Number((e.target as HTMLInputElement).value) });
+});
+$("pfx-sat").addEventListener("input", (e) => {
+  applyPaletteFx({ saturation: Number((e.target as HTMLInputElement).value) / 100 });
+});
+$("pfx-reset").addEventListener("click", () => applyPaletteFx({ ...ZERO_PALETTE_FX }));
+subscribe(syncPaletteFxUI);
+syncPaletteFxUI();
+
+function lineartZoom(v: number): number {
+  return Math.max(0.05, Math.min(8, v));
+}
+$("zoom-in").addEventListener("click", () => {
+  const z = getState().zoom;
+  setState({ zoom: activeDoc()?.lineart ? lineartZoom(z * 1.25) : Math.min(24, z + 1) });
+});
+$("zoom-out").addEventListener("click", () => {
+  const z = getState().zoom;
+  setState({ zoom: activeDoc()?.lineart ? lineartZoom(z / 1.25) : Math.max(1, z - 1) });
+});
+$("grid").addEventListener("click", () => {
+  const v = !getState().showGrid;
+  setState({ showGrid: v });
+  $("grid").setAttribute("aria-pressed", String(v));
+});
+$("underlay").addEventListener("input", (e) => {
+  setState({ underlay: Number((e.target as HTMLInputElement).value) });
+});
+
+const compareBtn = $("compare");
+const setCompare = (v: boolean) => {
+  setState({ compare: v });
+  compareBtn.setAttribute("aria-pressed", String(v));
+};
+compareBtn.addEventListener("pointerdown", () => setCompare(true));
+compareBtn.addEventListener("pointerup", () => setCompare(false));
+compareBtn.addEventListener("pointerleave", () => setCompare(false));
+
+/* ---------------------------------------------------------------- 新建画布 */
+// PICO-8 经典 16 色（顺序即索引；7 = 近白，作空白底色）
+const DEFAULT_PALETTE: [number, number, number][] = [
+  [0x00, 0x00, 0x00], [0x1d, 0x2b, 0x53], [0x7e, 0x25, 0x53], [0x00, 0x87, 0x51],
+  [0xab, 0x52, 0x36], [0x5f, 0x57, 0x4f], [0xc2, 0xc3, 0xc7], [0xff, 0xf1, 0xe8],
+  [0xff, 0x00, 0x4d], [0xff, 0xa3, 0x00], [0xff, 0xec, 0x27], [0x00, 0xe4, 0x36],
+  [0x29, 0xad, 0xff], [0x83, 0x76, 0x9c], [0xff, 0x77, 0xa8], [0xff, 0xcc, 0xaa],
+];
+const WHITE_IDX = 7;
+let blankSeq = 0;
+
+const newDlg = $("newdlg") as HTMLDialogElement;
+$("new").addEventListener("click", () => {
+  newDlg.showModal();
+});
+$("new-cancel").addEventListener("click", () => newDlg.close(""));
+function createBlank(): void {
+  const clamp = (v: number) => Math.max(8, Math.min(256, Math.round(v) || 32));
+  const w = clamp(Number(($("new-w") as HTMLInputElement).value));
+  const h = clamp(Number(($("new-h") as HTMLInputElement).value));
+  newDlg.close("");
+  const canvasLayer = mkLayer("画布层", "canvas"); // 空白画布只有画布层（白底）
+  addDoc({
+    name: `未命名-${++blankSeq}`,
+    jobId: "",
+    w,
+    h,
+    palette: DEFAULT_PALETTE,
+    paletteBase: DEFAULT_PALETTE,
+    paletteFx: { ...ZERO_PALETTE_FX },
+    recipe: presetRecipe("photo"),
+    presetName: "photo",
+    fill: new Int32Array(w * h).fill(WHITE_IDX),
+    ink: null,
+    inkVisible: true,
+    inkOpacity: 1,
+    layers: [canvasLayer],
+    activeLayerId: canvasLayer.id,
+    baseLayerId: canvasLayer.id,
+    sourceUrl: "",
+    colorsUsed: 1,
+    ms: 0,
+    blank: true,
+  });
+  setState({ zoom: fitZoomFor(w, h), colorIndex: 0 }); // 0 = 黑，画在白底上顺手
+}
+$("new-ok").addEventListener("click", createBlank);
+$("empty-open").addEventListener("click", () => $("file-input").click());
+$("empty-new").addEventListener("click", () => newDlg.showModal());
+for (const id of ["new-w", "new-h"]) {
+  $(id).addEventListener("keydown", (e) => {
+    if (e.key === "Enter") createBlank();
+  });
+}
+
+/* 滚轮缩放 + 光标坐标 */
+wrap.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const z = getState().zoom;
+  if (activeDoc()?.lineart) {
+    setState({ zoom: lineartZoom(e.deltaY < 0 ? z * 1.2 : z / 1.2) });
+    return;
+  }
+  const dir = e.deltaY < 0 ? 1 : -1;
+  setState({ zoom: Math.min(24, Math.max(1, z + dir)) });
+}, { passive: false });
+
+canvas.addEventListener("mousemove", (e) => {
+  const doc = activeDoc();
+  if (!doc) return;
+  const rect = canvas.getBoundingClientRect();
+  const z = rect.width / doc.w;
+  const x = Math.floor((e.clientX - rect.left) / z);
+  const y = Math.floor((e.clientY - rect.top) / z);
+  if (x < 0 || y < 0 || x >= doc.w || y >= doc.h) {
+    $("stat-cursor").textContent = "—";
+    return;
+  }
+  if (doc.lineart) {
+    $("stat-cursor").textContent = `x:${x} y:${y} px`;
+    return;
+  }
+  const idx = compositeFill(doc, y * doc.w + x);
+  $("stat-cursor").textContent = `x:${x} y:${y} ${hexOf(doc.palette[idx] ?? [0, 0, 0])}`;
+});
+canvas.addEventListener("mouseleave", () => ($("stat-cursor").textContent = "—"));
+
+/* 键盘：Ctrl+Tab 切换文档 */
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key === "Tab") {
+    e.preventDefault();
+    const { docs, activeIndex } = getState();
+    if (docs.length) setState({ activeIndex: (activeIndex + 1) % docs.length });
+  }
+});
+
+/* ---------------------------------------------------------------- 引擎状态 */
+health()
+  .then((h) => ($("engine-status").textContent = `引擎 ${h.status} · 模型 ${Object.values(h.models).filter(Boolean).length}/3`))
+  .catch(() => ($("engine-status").textContent = "引擎离线（start_engine.bat）"));
+
+/* ---------------------------------------------------------------- 会话自动保存/恢复（M3） */
+const urlParams = new URLSearchParams(location.search);
+const demoMode = urlParams.has("demo");
+const sessionDisabled = demoMode; // demo 自动建档不覆盖用户会话；测试可手动 __pf.autosave()
+const SESSION_KEY = "pf.session.v1";
+
+interface SessionLayer {
+  id: string;
+  name: string;
+  kind: PFLayer["kind"];
+  visible: boolean;
+  data: Array<[number, CellOverride]>;
+}
+interface SessionDocV1 {
+  name: string;
+  jobId: string;
+  w: number;
+  h: number;
+  lineart?: LineartAsset; // 线稿文档资产（源分辨率 PNG）
+  palette: [number, number, number][];
+  paletteBase?: [number, number, number][];
+  paletteFx?: PaletteFx;
+  recipe?: Partial<RecipeParams>;
+  presetName?: string;
+  fill: string; // Int32Array → base64
+  ink: string | null;
+  inkVisible?: boolean;
+  inkOpacity?: number;
+  layers: SessionLayer[];
+  activeLayerId: string;
+  baseLayerId: string;
+  sourceUrl?: string;
+  colorsUsed?: number;
+  ms?: number;
+  blank?: boolean;
+  srcPath?: string;
+  dirty?: boolean;
+}
+interface SessionPayload {
+  version: 1;
+  savedAt: number;
+  docs: SessionDocV1[];
+  ui?: {
+    activeIndex?: number; zoom?: number; showGrid?: boolean; preset?: string; size?: number;
+    applyAll?: boolean; underlay?: number; paletteSort?: PaletteSort;
+  };
+}
+
+function i32ToB64(arr: Int32Array): string {
+  const u8 = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+  let out = "";
+  const CH = 0x8000;
+  for (let i = 0; i < u8.length; i += CH) {
+    out += String.fromCharCode(...u8.subarray(i, i + CH));
+  }
+  return btoa(out);
+}
+function b64ToI32(b64: string): Int32Array {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Int32Array(u8.buffer);
+}
+
+function serializeDoc(doc: EditorDoc, includeSource: boolean): SessionDocV1 {
+  return {
+    name: doc.name,
+    lineart: doc.lineart,
+    jobId: doc.jobId,
+    w: doc.w,
+    h: doc.h,
+    palette: doc.palette,
+    paletteBase: doc.paletteBase,
+    paletteFx: doc.paletteFx,
+    recipe: doc.recipe,
+    presetName: doc.presetName,
+    fill: i32ToB64(doc.fill),
+    ink: doc.ink ? i32ToB64(doc.ink) : null,
+    inkVisible: doc.inkVisible,
+    inkOpacity: doc.inkOpacity,
+    layers: doc.layers.map((l) => ({
+      id: l.id, name: l.name, kind: l.kind, visible: l.visible,
+      data: [...l.data.entries()] as Array<[number, CellOverride]>,
+    })),
+    activeLayerId: doc.activeLayerId,
+    baseLayerId: doc.baseLayerId,
+    sourceUrl: includeSource ? doc.sourceUrl : "",
+    colorsUsed: doc.colorsUsed,
+    ms: doc.ms,
+    blank: doc.blank,
+    srcPath: doc.src?.path,
+    dirty: doc.dirty,
+  };
+}
+
+function sessionPayload(includeSource: boolean): SessionPayload {
+  const s = getState();
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    docs: s.docs.map((d) => serializeDoc(d, includeSource)),
+    ui: {
+      activeIndex: s.activeIndex, zoom: s.zoom, showGrid: s.showGrid,
+      preset: s.preset, size: s.size, applyAll: s.applyAll,
+      underlay: s.underlay, paletteSort: s.paletteSort,
+    },
+  };
+}
+
+let sessionBusy = false;
+/** 自动保存：localStorage 轻量副本 + 引擎 web/session.json 全量（含源图缩略）。 */
+async function autosave(force = false): Promise<void> {
+  if ((!force && sessionDisabled) || !getState().docs.length || sessionBusy) return;
+  sessionBusy = true;
+  try {
+    const full = sessionPayload(true);
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(full));
+    } catch {
+      try {
+        localStorage.setItem(SESSION_KEY, JSON.stringify(sessionPayload(false)));
+        console.warn("会话超出 localStorage 配额，已丢弃源图缩略");
+      } catch {
+        localStorage.removeItem(SESSION_KEY);
+        console.warn("会话过大，localStorage 备份已跳过（引擎 session.json 仍可恢复）");
+      }
+    }
+    await fetch("/api/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: full }),
+    });
+  } catch (err) {
+    console.warn("会话保存失败", err);
+  } finally {
+    sessionBusy = false;
+  }
+}
+
+function isSession(v: unknown): v is SessionPayload {
+  if (!v || typeof v !== "object") return false;
+  const o = v as SessionPayload;
+  return o.version === 1 && Array.isArray(o.docs);
+}
+
+async function loadSessionPayload(): Promise<SessionPayload | null> {
+  try {
+    const res = await fetch("/api/session");
+    if (res.ok) {
+      const data: unknown = await res.json();
+      if (isSession(data)) return data;
+    }
+  } catch { /* 引擎离线 → 退回 localStorage */ }
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw) {
+      const data: unknown = JSON.parse(raw);
+      if (isSession(data)) return data;
+    }
+  } catch { /* 忽略损坏副本 */ }
+  return null;
+}
+
+function clearSession(): void {
+  localStorage.removeItem(SESSION_KEY);
+  void fetch("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: { version: 1, savedAt: Date.now(), docs: [] } }),
+  }).catch(() => { /* 引擎离线时忽略 */ });
+}
+
+function normalizeFill(arr: Int32Array, n: number): Int32Array {
+  if (arr.length === n) return arr;
+  const out = new Int32Array(n).fill(-1);
+  out.set(arr.subarray(0, Math.min(n, arr.length)));
+  return out;
+}
+
+function restoreDoc(sd: SessionDocV1): void {
+  if (sd.lineart) {
+    // 线稿文档：无网格/图层/调色板，直接恢复源分辨率图
+    const preset = sd.presetName ?? "lineart";
+    const doc = addDoc({
+      name: sd.name ?? "未命名",
+      lineart: sd.lineart,
+      jobId: sd.jobId ?? "",
+      w: sd.lineart.width,
+      h: sd.lineart.height,
+      palette: [],
+      paletteBase: [],
+      paletteFx: { ...ZERO_PALETTE_FX },
+      recipe: { ...presetRecipe(preset), ...(sd.recipe ?? {}) },
+      presetName: preset,
+      fill: new Int32Array(0),
+      ink: null,
+      inkVisible: false,
+      inkOpacity: 1,
+      layers: [],
+      activeLayerId: "",
+      baseLayerId: "",
+      sourceUrl: sd.sourceUrl ?? "",
+      colorsUsed: 0,
+      ms: sd.ms ?? 0,
+      src: sd.srcPath ? { path: sd.srcPath } : undefined,
+    });
+    doc.dirty = sd.dirty ?? false;
+    return;
+  }
+  const layers: PFLayer[] = sd.layers.map((sl) => {
+    const layer = mkLayer(sl.name, sl.kind);
+    layer.visible = sl.visible;
+    for (const [i, ov] of sl.data) layer.data.set(i, { ...ov });
+    return layer;
+  });
+  if (!layers.length) layers.push(mkLayer("画布层", "canvas"));
+  const idMap = new Map(sd.layers.map((sl, k) => [sl.id, layers[k].id]));
+  const baseLayerId = idMap.get(sd.baseLayerId) ?? layers[0].id;
+  const activeLayerId = idMap.get(sd.activeLayerId) ?? baseLayerId;
+  const preset = sd.presetName ?? "photo";
+  const palette = sd.palette ?? [[0, 0, 0] as [number, number, number]];
+  const n = Math.max(1, sd.w) * Math.max(1, sd.h);
+  const doc = addDoc({
+    name: sd.name ?? "未命名",
+    jobId: sd.jobId ?? "",
+    w: Math.max(1, sd.w),
+    h: Math.max(1, sd.h),
+    palette,
+    paletteBase: sd.paletteBase ?? palette,
+    paletteFx: sd.paletteFx ?? { ...ZERO_PALETTE_FX },
+    recipe: { ...presetRecipe(preset), ...(sd.recipe ?? {}) },
+    presetName: preset,
+    fill: normalizeFill(b64ToI32(sd.fill ?? ""), n),
+    ink: sd.ink ? normalizeFill(b64ToI32(sd.ink), n) : null,
+    inkVisible: sd.inkVisible ?? true,
+    inkOpacity: sd.inkOpacity ?? 1,
+    layers,
+    activeLayerId,
+    baseLayerId,
+    sourceUrl: sd.sourceUrl ?? "",
+    colorsUsed: sd.colorsUsed ?? 0,
+    ms: sd.ms ?? 0,
+    src: sd.srcPath ? { path: sd.srcPath } : undefined,
+    blank: sd.blank ?? false,
+  });
+  doc.dirty = sd.dirty ?? false;
+}
+
+function restoreSession(s: SessionPayload): void {
+  for (const sd of s.docs) restoreDoc(sd);
+  const docs = getState().docs;
+  if (!docs.length) return;
+  const ui = s.ui ?? {};
+  const idx = Math.min(Math.max(0, ui.activeIndex ?? docs.length - 1), docs.length - 1);
+  setState({
+    activeIndex: idx,
+    zoom: typeof ui.zoom === "number" ? Math.max(0.05, Math.min(24, ui.zoom)) : getState().zoom,
+    showGrid: ui.showGrid ?? true,
+    preset: ui.preset ?? getState().preset,
+    size: ui.size ?? getState().size,
+    applyAll: ui.applyAll ?? false,
+    underlay: ui.underlay ?? 0,
+    paletteSort: ui.paletteSort ?? "usage",
+  });
+  $("grid").setAttribute("aria-pressed", String(getState().showGrid));
+  ($("underlay") as HTMLInputElement).value = String(getState().underlay);
+  invalidateBitmaps(activeDoc() ?? docs[0]);
+  redrawCanvas();
+  setStatus(`已恢复 ${docs.length} 个文档`);
+}
+
+let pendingSession: SessionPayload | null = null;
+async function offerRestore(): Promise<void> {
+  if (sessionDisabled || getState().docs.length) return;
+  const data = await loadSessionPayload();
+  if (!data || !data.docs.length || getState().docs.length) return;
+  pendingSession = data;
+  $("restore-info").textContent =
+    `发现 ${data.docs.length} 个文档（自动保存于 ${new Date(data.savedAt).toLocaleString()}）。`;
+  ($("restoredlg") as HTMLDialogElement).showModal();
+}
+const restoreDlg = $("restoredlg") as HTMLDialogElement;
+$("restore-yes").addEventListener("click", () => {
+  const s = pendingSession;
+  pendingSession = null;
+  restoreDlg.close();
+  if (s) restoreSession(s);
+});
+$("restore-no").addEventListener("click", () => {
+  pendingSession = null;
+  clearSession();
+  restoreDlg.close();
+});
+
+if (!sessionDisabled) {
+  window.setInterval(() => void autosave(), 30000);
+  window.addEventListener("pagehide", () => void autosave());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") void autosave();
+  });
+}
+
+/* demo 模式：?demo=1 自动从引擎拉测试图建档（自动化验收/快速体验） */
+if (demoMode) {
+  const demos: Array<[string, string, string, number]> = [
+    ["scene", "tests/golden/scene.png", "photo", 64],
+    ["girl_umbrella", "tests/golden/inputs/girl_umbrella.png", "illustration", 64],
+    ["scene_48", "tests/golden/scene.png", "photo", 48],
+  ];
+  (async () => {
+    for (const [name, path, preset, size] of demos) {
+      try {
+        const r = await convertPath(path, preset, size);
+        docFromResponse(name, r, { path }, presetRecipe(preset), preset);
+      } catch (err) {
+        setStatus(`demo 失败: ${(err as Error).message}`);
+      }
+    }
+  })();
+}
+
+/* ------------------------------------------------ 图层操作事件：提取/删除/激活由面板派发 */
+document.addEventListener("pf:extract-layer", ((e: CustomEvent<"cut" | "copy">) => {
+  const doc = activeDoc();
+  if (doc) extractSelectionToLayer(doc, e.detail);
+}) as EventListener);
+document.addEventListener("pf:delete-layer", ((e: CustomEvent<string>) => {
+  const doc = activeDoc();
+  if (doc) deleteLayer(doc, e.detail);
+}) as EventListener);
+document.addEventListener("pf:set-active-layer", ((e: CustomEvent<string>) => {
+  const doc = activeDoc();
+  if (!doc) return;
+  updateDoc(doc, { activeLayerId: e.detail });
+}) as EventListener);
+
+/* 装配面板 */
+mountTabs($("tabs"));
+mountLayers($("layers"));
+mountPalette($("palette"), $("pal-count"), $("pal-custom"), $("pal-sort") as HTMLSelectElement);
+mountTools();
+mountHistory($("history"));
+mountColorLib($("colorlib"));
+redrawCanvas();
+void offerRestore();
+
+/* 开发调试句柄（自动化验收用） */
+if ((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV) {
+  (window as unknown as Record<string, unknown>).__pf = {
+    getState, activeDoc,
+    autosave: () => autosave(true),
+    importFiles: (files: File[]) => importFiles(files, "测试导入"),
+  };
+}

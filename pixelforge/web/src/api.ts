@@ -1,0 +1,103 @@
+/** 后端客户端（引擎 FastAPI :8700，经 Vite 代理）。 */
+
+export interface ConvertResponse {
+  job_id: string;
+  width: number;
+  height: number;
+  palette: [number, number, number][];
+  fill: number[][];
+  ink: number[][] | null;
+  preview_png: string;
+  source_png: string | null;
+  meta: { colors_used: number; grid_ms: number; [k: string]: unknown };
+  recipe: Record<string, unknown>;
+}
+
+async function ensureOk(res: Response): Promise<Response> {
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {
+      /* 保留默认 */
+    }
+    throw new Error(`引擎 ${res.status}: ${detail}`);
+  }
+  return res;
+}
+
+/** 配方覆盖（M3 参数面板）：与 target 一并送引擎，深合并到预设配方上。 */
+export type RecipeOverrides = Record<string, unknown>;
+
+export async function convertFile(
+  file: File,
+  preset: string,
+  size: number,
+  overrides: RecipeOverrides = {},
+): Promise<ConvertResponse> {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("recipe", preset);
+  fd.append("overrides", JSON.stringify({ ...overrides, target: { width: size, height: size } }));
+  const res = await ensureOk(await fetch("/api/convert_file", { method: "POST", body: fd }));
+  return res.json();
+}
+
+/** 按服务器路径转换（demo 模式 / 后续批量用）。 */
+export async function convertPath(
+  imagePath: string,
+  preset: string,
+  size: number,
+  overrides: RecipeOverrides = {},
+): Promise<ConvertResponse> {
+  const res = await ensureOk(
+    await fetch("/api/convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_path: imagePath,
+        recipe: preset,
+        overrides: { ...overrides, target: { width: size, height: size } },
+      }),
+    }),
+  );
+  return res.json();
+}
+
+export async function health(): Promise<{
+  status: string;
+  presets: string[];
+  models: Record<string, boolean>;
+}> {
+  const res = await ensureOk(await fetch("/api/health"));
+  return res.json();
+}
+
+export interface LineartResponse {
+  mode: string;
+  width: number;
+  height: number;
+  png: string; // 黑线白纸，源图分辨率
+  source_png: string | null; // 源图缩略（对比浮层用）
+}
+
+/** 独立线稿提取（上传原图）：编辑器文件选择用。 */
+export async function extractLineartFile(file: File, mode = "onnx"): Promise<LineartResponse> {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("mode", mode);
+  const res = await ensureOk(await fetch("/api/lineart_file", { method: "POST", body: fd }));
+  return res.json();
+}
+
+/** 独立线稿提取（服务器路径）：demo / 路径打开的文件用。 */
+export async function extractLineartPath(imagePath: string, mode = "onnx"): Promise<LineartResponse> {
+  const res = await ensureOk(
+    await fetch("/api/lineart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_path: imagePath, mode }),
+    }),
+  );
+  return res.json();
+}

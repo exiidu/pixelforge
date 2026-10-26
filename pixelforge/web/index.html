@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PixelForge</title>
+</head>
+<body>
+  <div id="app" class="pf-app">
+    <div class="pf-top">
+      <div class="pf-logo"><i></i>PixelForge</div>
+      <button id="new" class="pf-btn">新建画布…</button>
+      <button id="open" class="pf-btn primary">打开图片…</button>
+      <button id="open-folder" class="pf-btn">打开文件夹…</button>
+      <input id="file-input" type="file" accept="image/*" multiple hidden />
+      <input id="folder-input" type="file" webkitdirectory multiple hidden />
+      <div class="pf-spacer"></div>
+      <span id="engine-status" class="pf-val"></span>
+      <button id="export" class="pf-btn">导出</button>
+    </div>
+
+    <dialog id="newdlg" class="pf-dlg">
+      <div class="pf-dlg-body">
+        <h3>新建画布</h3>
+        <div class="pf-dlg-row">
+          <label>宽 <input id="new-w" type="number" min="8" max="256" step="1" value="32" /> 格</label>
+          <label>高 <input id="new-h" type="number" min="8" max="256" step="1" value="32" /> 格</label>
+        </div>
+        <p class="pf-mute">空白画布不经过转换引擎，作为独立像素编辑器使用（默认 16 色板，白底）。</p>
+        <div class="pf-dlg-btns">
+          <button type="button" class="pf-btn" id="new-cancel">取消</button>
+          <button type="button" class="pf-btn primary" id="new-ok">创建</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="restoredlg" class="pf-dlg">
+      <div class="pf-dlg-body">
+        <h3>恢复上次会话</h3>
+        <p class="pf-mute" id="restore-info">发现自动保存。</p>
+        <p class="pf-mute">恢复后配方、图层与手改原样保留；撤销历史不恢复。</p>
+        <div class="pf-dlg-btns">
+          <button type="button" class="pf-btn" id="restore-no">忽略并清空</button>
+          <button type="button" class="pf-btn primary" id="restore-yes">恢复</button>
+        </div>
+      </div>
+    </dialog>
+
+    <div class="pf-tabs" id="tabs" aria-label="打开的文档"></div>
+
+    <div class="pf-body">
+      <aside class="pf-side" aria-label="工具面板">
+        <div class="pf-card">
+          <div class="pf-card-h">转换工具</div>
+          <label class="pf-topfield">预设
+            <select id="preset">
+              <option value="photo" selected>照片</option>
+              <option value="illustration">插画</option>
+              <option value="lineart">线稿提取</option>
+            </select>
+          </label>
+          <label class="pf-topfield" id="size-field">尺寸
+            <select id="size">
+              <option value="16">16</option><option value="24">24</option>
+              <option value="32">32</option><option value="48">48</option>
+              <option value="64" selected>64</option><option value="96">96</option>
+              <option value="128">128</option><option value="192">192</option>
+              <option value="256">256</option><option value="512">512</option>
+            </select>
+          </label>
+          <p class="pf-mute" id="mode-note">改动即时重转换当前文档；空白画布不受影响。</p>
+          <label class="pf-param-row pf-allrow" title="打开后参数改动会广播到所有文档并各自重转换">
+            <input type="checkbox" id="rp-all"> 应用到全部标签
+          </label>
+          <details class="pf-params" id="params">
+            <summary>转换参数 <span class="pf-val" id="rp-scope">仅当前文档</span></summary>
+            <label class="pf-param">边缘权重 <output id="rp-edge-v">2.0</output>
+              <input type="range" id="rp-edge" min="0" max="4" step="0.1" value="2">
+            </label>
+            <label class="pf-param">暗部权重 <output id="rp-dark-v">1.5</output>
+              <input type="range" id="rp-dark" min="0" max="4" step="0.1" value="1.5">
+            </label>
+            <label class="pf-param">对比度 <output id="rp-contrast-v">1.00</output>
+              <input type="range" id="rp-contrast" min="0" max="2" step="0.05" value="1">
+            </label>
+            <label class="pf-param">软边比例 <output id="rp-soft-v">1.40</output>
+              <input type="range" id="rp-soft" min="1" max="2.5" step="0.05" value="1.4">
+            </label>
+            <label class="pf-param">合并阈值 <output id="rp-merge-v">0.05</output>
+              <input type="range" id="rp-merge" min="0" max="0.2" step="0.01" value="0.05">
+            </label>
+            <label class="pf-topfield">调色板
+              <select id="rp-pal">
+                <option value="extract">从源图提取</option>
+                <option value="builtin:gameboy">Game Boy</option>
+                <option value="builtin:cga16">CGA 16</option>
+                <option value="builtin:gray8">灰阶 8</option>
+                <option value="builtin:paper">白纸单色</option>
+              </select>
+            </label>
+            <label class="pf-param">色数 <output id="rp-maxcolors-v">64</output>
+              <input type="range" id="rp-maxcolors" min="2" max="128" step="1" value="64">
+            </label>
+            <label class="pf-topfield">线稿
+              <select id="rp-lineart">
+                <option value="off">关闭</option>
+                <option value="xdog">XDoG</option>
+                <option value="onnx">ONNX（精细）</option>
+              </select>
+            </label>
+            <label class="pf-param-row"><input type="checkbox" id="rp-ink"> 引擎墨线</label>
+            <p class="pf-mute">滑杆 300ms 防抖重转换；空白画布不参与转换。</p>
+          </details>
+        </div>
+
+        <div class="pf-card" id="tools-card">
+          <div class="pf-card-h">编辑工具</div>
+          <div class="pf-toolgrid">
+            <button class="pf-tile" id="tool-move"></button>
+            <button class="pf-tile" id="tool-select"></button>
+            <button class="pf-tile" id="tool-lasso"></button>
+            <button class="pf-tile" id="tool-pencil"></button>
+            <button class="pf-tile" id="tool-eraser"></button>
+            <button class="pf-tile" id="tool-bucket"></button>
+            <button class="pf-tile" id="tool-picker"></button>
+            <button class="pf-tile" id="tool-line"></button>
+            <button class="pf-tile" id="tool-rect"></button>
+            <button class="pf-tile" id="tool-ellipse"></button>
+            <button class="pf-tile" id="tool-hand"></button>
+          </div>
+          <div class="pf-toolrow">
+            <button class="pf-tile icon" id="btn-undo" title="撤销（Ctrl+Z）"></button>
+            <button class="pf-tile icon" id="btn-redo" title="重做（Ctrl+Y）"></button>
+            <span class="pf-lbl">笔刷</span>
+            <button class="pf-tile seg" id="brush-1" title="笔刷 1px">1</button>
+            <button class="pf-tile seg" id="brush-2" title="笔刷 2px">2</button>
+            <button class="pf-tile seg" id="brush-3" title="笔刷 3px">3</button>
+            <button class="pf-tile seg" id="brush-4" title="笔刷 4px">4</button>
+          </div>
+          <div class="pf-toolrow">
+            <span class="pf-lbl">对称</span>
+            <button class="pf-tile seg" id="sym-off" title="关">关</button>
+            <button class="pf-tile seg" id="sym-h" title="左右镜像">H</button>
+            <button class="pf-tile seg" id="sym-v" title="上下镜像">V</button>
+            <button class="pf-tile seg" id="sym-quad" title="四分镜像">四分</button>
+          </div>
+          <p class="pf-mute">作用于「图层」面板选中的层；选区存在时绘制被限制在选区内，Esc 取消选区。快捷键：V 移动 · S 选区 · Q 套索 · B 铅笔 · E 橡皮 · G 油漆桶 · I 取色 · L 直线 · R 矩形 · O 椭圆 · M 对称。</p>
+        </div>
+
+        <div class="pf-h">操作提示</div>
+        <p class="pf-mute">滚轮缩放 · 按住「对比」看源图</p>
+      </aside>
+
+      <main class="pf-stage">
+        <div class="pf-empty" id="empty" hidden>
+          <div class="pf-empty-inner">
+            <div class="pf-empty-title">还没有打开的文档</div>
+            <div class="pf-empty-btns">
+              <button class="pf-btn primary" id="empty-open">打开图片…</button>
+              <button class="pf-btn" id="empty-new">新建画布…</button>
+            </div>
+            <div class="pf-mute">支持多选批量打开 · 空白画布不经转换引擎</div>
+          </div>
+        </div>
+        <div class="pf-canvaswrap" id="canvaswrap" hidden>
+          <canvas id="canvas" aria-label="像素画编辑画布"></canvas>
+        </div>
+      </main>
+
+      <aside class="pf-side right">
+        <div id="pixel-panels">
+        <div class="pf-h">图层</div>
+        <div id="layers"></div>
+        <div class="pf-h">历史</div>
+        <div class="pf-hist" id="history"></div>
+        <div class="pf-h">调色板 <span class="pf-val" id="pal-count"></span></div>
+        <select id="pal-sort" class="pf-mini-select" title="颜色排序方式（作用于两组颜色）">
+          <option value="usage">按使用频率</option>
+          <option value="hue">按色相（红起）</option>
+          <option value="light">按明度（伽马）</option>
+          <option value="sat">按饱和度</option>
+        </select>
+        <div class="pf-pal-sec">文档颜色 <span class="pf-val">左键选色 · 自定义色左键选用 / 右键删除</span></div>
+        <div class="pf-pal" id="palette"></div>
+        <div class="pf-pal-sec">自定义颜色</div>
+        <div class="pf-pal" id="pal-custom"></div>
+
+        <details class="pf-lib" id="palfx">
+          <summary>色板变换 <span class="pf-val" id="pfx-v">原色</span></summary>
+          <label class="pf-param">明度 <output id="pfx-light-v">0</output>
+            <input type="range" id="pfx-light" min="-100" max="100" step="1" value="0">
+          </label>
+          <label class="pf-param">色相 <output id="pfx-hue-v">0°</output>
+            <input type="range" id="pfx-hue" min="-180" max="180" step="1" value="0">
+          </label>
+          <label class="pf-param">饱和度 <output id="pfx-sat-v">0</output>
+            <input type="range" id="pfx-sat" min="-100" max="100" step="1" value="0">
+          </label>
+          <div class="pf-lib-btns">
+            <button class="pf-btn" id="pfx-reset">重置</button>
+          </div>
+          <p class="pf-mute">改板不改画：格子索引不动，可一键换季/夜景。</p>
+        </details>
+
+        <details class="pf-lib" id="colorlib">
+          <summary>颜色库</summary>
+          <select id="lib-mode" class="pf-mini-select">
+            <option value="rgb">RGB 滑块</option>
+            <option value="gray">灰度滑块</option>
+            <option value="cube">色相立方体</option>
+            <option value="wheel">色轮</option>
+            <option value="hex">十六进制</option>
+          </select>
+          <div class="pf-lib-prev">
+            <div id="lib-prev"></div>
+            <span class="mono" id="lib-hexlab">#FF0000</span>
+          </div>
+          <div id="lib-rgb" class="pf-lib-sec">
+            <label>R <input type="range" id="lib-r" min="0" max="255" value="255"></label>
+            <label>G <input type="range" id="lib-g" min="0" max="255" value="0"></label>
+            <label>B <input type="range" id="lib-b" min="0" max="255" value="0"></label>
+          </div>
+          <div id="lib-gray" class="pf-lib-sec" hidden>
+            <label>灰度 <input type="range" id="lib-gv" min="0" max="255" value="128"></label>
+          </div>
+          <div id="lib-cube" class="pf-lib-sec" hidden>
+            <div class="pf-cube">
+              <div class="pf-sv-wrap">
+                <canvas id="lib-sv2" width="110" height="110" title="点击取饱和度/明度"></canvas>
+                <div class="pf-sv-cur" id="lib-sv2-cur"></div>
+              </div>
+              <div class="pf-hue-wrap">
+                <canvas id="lib-huebar" width="20" height="110" title="点击取色相"></canvas>
+                <div class="pf-hue-cur" id="lib-huebar-cur"></div>
+              </div>
+            </div>
+          </div>
+          <div id="lib-wheel" class="pf-lib-sec" hidden>
+            <canvas id="lib-ring" width="110" height="110" title="点击取色相"></canvas>
+            <div class="pf-sv-wrap">
+              <canvas id="lib-sv" width="110" height="110" title="点击取饱和度/明度"></canvas>
+              <div class="pf-sv-cur" id="lib-sv-cur"></div>
+            </div>
+          </div>
+          <div id="lib-hex" class="pf-lib-sec" hidden>
+            <div class="pf-lib-hexrow">
+              <input id="lib-hexin" class="mono" placeholder="#RRGGBB" maxlength="7">
+              <button class="pf-btn" id="lib-hexok">选用</button>
+            </div>
+          </div>
+          <div class="pf-lib-btns">
+            <button class="pf-btn" id="lib-add" title="把当前颜色加入自定义调色板">加入到调色板</button>
+            <button class="pf-btn" id="lib-copy" title="拷贝当前颜色为十六进制">拷贝 Hex</button>
+          </div>
+        </details>
+        </div>
+
+        <div id="lineart-panels" hidden>
+          <div class="pf-h">线稿文档</div>
+          <p class="pf-val" id="la-dims">—</p>
+          <p class="pf-mute">源分辨率只读视图，不做像素化。滚轮缩放、按住「对比源图」查看原图；导出时输出清晰线稿 PNG。</p>
+          <p class="pf-mute">切回「照片 / 插画」预设可重新转换为像素画（手改与图层会重置）。</p>
+        </div>
+      </aside>
+    </div>
+
+    <div class="pf-status">
+      <span id="stat-doc">—</span>
+      <div class="pf-spacer"></div>
+      <button class="pf-btn" id="zoom-out" aria-label="缩小">−</button>
+      <span class="pf-val mono" id="zoom-v">600%</span>
+      <button class="pf-btn" id="zoom-in" aria-label="放大">＋</button>
+      <button class="pf-btn" id="grid" aria-pressed="true">网格线</button>
+      <span class="pf-under" id="underlay-wrap" title="描图底图：源图按该透明度垫在图层下方，透明格可见">
+        描图 <input type="range" id="underlay" min="0" max="100" step="5" value="0">
+      </span>
+      <button class="pf-btn" id="compare" aria-pressed="false">按住对比源图</button>
+      <span class="mono" id="stat-cursor">—</span>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+
+  <!-- 转换进度（重转换时中央弹出） -->
+  <dialog id="progd" class="pf-prog">
+    <div class="pf-prog-spin"></div>
+    <div class="pf-prog-text" id="prog-text">正在转换…</div>
+    <div class="pf-prog-time pf-val mono" id="prog-time">0.0s</div>
+  </dialog>
+
+  <!-- 导出（约 4/5 界面，仿 PS 导出窗三栏） -->
+  <dialog id="exportdlg" class="pf-export">
+    <div class="pf-export-inner">
+      <aside class="pf-export-list">
+        <label class="pf-export-all"><input type="checkbox" id="exp-all" checked> 全选</label>
+        <div id="exp-docs"></div>
+      </aside>
+      <div class="pf-export-center">
+        <div class="pf-export-ptab">预览 <span class="pf-val" id="exp-pname"></span></div>
+        <div class="pf-export-stage"><canvas id="exp-canvas"></canvas></div>
+        <div class="pf-export-zoom">
+          <button class="pf-btn" id="exp-zoomout" aria-label="缩小预览">−</button>
+          <span class="pf-val mono" id="exp-zoomv">100%</span>
+          <button class="pf-btn" id="exp-zoomin" aria-label="放大预览">＋</button>
+        </div>
+      </div>
+      <aside class="pf-export-opts">
+        <div class="pf-card-h">文件设置</div>
+      <label class="pf-lib-sec pf-export-row">内容
+        <select id="exp-content" class="pf-mini-select">
+          <option value="composite" selected>像素画合成</option>
+          <option value="engine">线稿（引擎提取）</option>
+          <option value="ink">像素墨线层</option>
+        </select>
+      </label>
+      <label class="pf-lib-sec pf-export-row">格式
+        <select id="exp-format" class="pf-mini-select">
+          <option value="png" selected>PNG（含透明）</option>
+          <option value="jpeg">JPEG（白底）</option>
+          <option value="webp">WebP</option>
+        </select>
+      </label>
+      <label class="pf-export-row" id="exp-trans-row">
+        <input type="checkbox" id="exp-trans"> 透明背景（轮廓外像素透明化）
+      </label>
+        <div class="pf-card-h">图像大小</div>
+        <label class="pf-lib-sec pf-export-row">缩放
+          <select id="exp-scale" class="pf-mini-select">
+            <option value="1" selected>100%（1×）</option>
+            <option value="2">200%（2×）</option>
+            <option value="4">400%（4×）</option>
+            <option value="8">800%（8×）</option>
+            <option value="16">1600%（16×）</option>
+          </select>
+        </label>
+        <div class="pf-lib-sec pf-export-dims">
+          <label>宽 <input type="number" id="exp-w" min="1" max="8192"></label>
+          <label>高 <input type="number" id="exp-h" min="1" max="8192"></label>
+        </div>
+        <label class="pf-lib-sec pf-export-row" title="{size}=文档网格尺寸，{preset}=预设名">命名
+          <select id="exp-name" class="pf-mini-select">
+            <option value="auto" selected>名称_输出尺寸（自动）</option>
+            <option value="{name}_{size}">名称_网格尺寸</option>
+            <option value="{name}_{preset}">名称_预设</option>
+          </select>
+        </label>
+        <label class="pf-export-row" id="exp-sheet-row" title="同尺寸文档合并为水平条带（游戏精灵图）">
+          <input type="checkbox" id="exp-sheet"> 精灵图集（同尺寸合并条带）
+        </label>
+        <p class="pf-mute">勾选多个文档即可批量导出，每个文档一个文件；引擎线稿按源图原始分辨率导出，像素墨线层/合成按倍率最近邻放大。图集按尺寸分组，每组一个文件。</p>
+        <div class="pf-spacer"></div>
+        <div class="pf-export-btns">
+          <button class="pf-btn" id="exp-cancel">取消</button>
+          <button class="pf-btn primary" id="exp-ok">导出</button>
+        </div>
+      </aside>
+    </div>
+  </dialog>
+
+  <!-- 调色板右键菜单 -->
+  <div id="pal-ctx" class="pf-ctx" hidden>
+    <button id="pal-ctx-del">删除颜色</button>
+  </div>
+</body>
+</html>

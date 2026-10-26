@@ -1,0 +1,238 @@
+/* PixelForge 编辑器样式（从已验证原型移植 + 多文档扩展） */
+* { box-sizing: border-box }
+/* 显式 display 声明会压过 UA 对 [hidden] 的 display:none——强制隐藏属性始终生效 */
+[hidden] { display: none !important }
+html, body { margin: 0; height: 100% }
+/* 设计变量放 :root：导出窗/进度窗/右键菜单是 body 直属元素，在 .pf-app 之外也要能取到 */
+:root { color-scheme: light dark;
+  --pf-panel: light-dark(#fbfbfd, #1d1f24); --pf-panel2: light-dark(#f1f2f5, #232529);
+  --pf-border: light-dark(#d9dbe1, #33363d); --pf-dim: light-dark(#747681, #979aa3);
+  --pf-accent: light-dark(#2e8b57, #54c284); --pf-accent-fg: light-dark(#ffffff, #0e2417) }
+.pf-app { display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  background: light-dark(#eceef2, #141519); color: light-dark(#26282c, #e7e8ea);
+  font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+.mono { font-family: ui-monospace, Consolas, monospace }
+
+.pf-top { display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 12px;
+  background: var(--pf-panel); border-bottom: 1px solid var(--pf-border); flex: none }
+.pf-logo { display: flex; align-items: center; gap: 8px; font-weight: 600 }
+.pf-logo i { width: 16px; height: 16px; border-radius: 3px;
+  background: conic-gradient(var(--pf-accent) 0 25%, transparent 0 50%, var(--pf-accent) 0 75%, transparent 0) }
+.pf-topfield { display: flex; align-items: center; gap: 6px; color: var(--pf-dim) }
+.pf-app select { font: inherit; color: inherit; background: var(--pf-panel2);
+  border: 1px solid var(--pf-border); border-radius: 6px; padding: 4px 8px }
+.pf-btn { display: inline-flex; align-items: center; gap: 6px; font: inherit; color: inherit;
+  background: var(--pf-panel2); border: 1px solid var(--pf-border); border-radius: 7px;
+  padding: 5px 12px; cursor: pointer }
+.pf-btn:hover { border-color: var(--pf-accent) }
+.pf-btn.primary { background: var(--pf-accent); color: var(--pf-accent-fg); border-color: transparent; font-weight: 600 }
+.pf-btn[aria-pressed="true"] { background: var(--pf-accent); color: var(--pf-accent-fg); border-color: transparent }
+.pf-btn:disabled { opacity: .4; cursor: default }
+.pf-spacer { flex: 1 }
+.pf-val { font-size: 12px; color: var(--pf-dim) }
+.pf-mute { color: var(--pf-dim); font-size: 12px; margin: 6px 0 }
+
+/* 标签栏 */
+.pf-tabs { display: flex; gap: 2px; background: var(--pf-panel); border-bottom: 1px solid var(--pf-border);
+  padding: 4px 8px 0; flex: none; overflow-x: auto; min-height: 32px }
+.pf-tab { display: flex; align-items: center; gap: 7px; padding: 5px 10px; border: 1px solid var(--pf-border);
+  border-bottom: 0; border-radius: 7px 7px 0 0; background: var(--pf-panel2); cursor: pointer;
+  max-width: 200px; white-space: nowrap; font-size: 12px }
+.pf-tab.active { background: var(--pf-panel); font-weight: 600; border-color: var(--pf-accent) }
+.pf-tab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pf-accent); display: none }
+.pf-tab.dirty .dot { display: block }
+.pf-tab .close { border: 0; background: none; color: var(--pf-dim); cursor: pointer; padding: 0 2px; border-radius: 4px }
+.pf-tab .close:hover { background: var(--pf-border); color: inherit }
+.pf-tabs-empty { color: var(--pf-dim); font-size: 12px; padding: 6px 4px }
+
+.pf-body { flex: 1; display: flex; min-height: 0 }
+.pf-side { width: 230px; flex: none; background: var(--pf-panel); border-right: 1px solid var(--pf-border);
+  overflow-y: auto; padding: 12px 14px 20px }
+.pf-side.right { border-right: 0; border-left: 1px solid var(--pf-border) }
+.pf-h { font-size: 11px; font-weight: 600; letter-spacing: .8px; color: var(--pf-dim); margin: 16px 0 8px }
+.pf-h:first-child { margin-top: 2px }
+
+.pf-stage { flex: 1; display: flex; min-width: 0; background: var(--pf-panel2) }
+.pf-empty { flex: 1; display: grid; place-items: center; color: var(--pf-dim) }
+.pf-empty-inner { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 20px }
+.pf-empty-title { font-size: 14px; font-weight: 600 }
+.pf-empty-btns { display: flex; gap: 10px }
+.pf-canvaswrap { flex: 1; display: grid; place-items: center; min-height: 0; overflow: auto; padding: 18px;
+  background: repeating-conic-gradient(light-dark(#e4e6ea, #1a1c21) 0 25%, light-dark(#edeef2, #20232a) 0 50%) 0 0 / 24px 24px }
+.pf-canvaswrap canvas { image-rendering: pixelated; box-shadow: 0 2px 14px rgba(0,0,0,.18) }
+
+/* 左栏菜单卡（转换工具 / 编辑工具） */
+.pf-card { border: 1px solid var(--pf-border); border-radius: 10px; padding: 10px 12px 12px;
+  margin-bottom: 12px; background: var(--pf-panel2) }
+.pf-card-h { font-size: 11px; font-weight: 600; letter-spacing: .8px; color: var(--pf-dim); margin: 0 0 8px }
+.pf-card .pf-topfield { display: flex; margin: 6px 0 }
+.pf-card select { flex: 1 }
+/* 转换参数面板（M3） */
+.pf-params { border-top: 1px solid var(--pf-border); margin-top: 6px; padding-top: 4px }
+.pf-params summary { cursor: pointer; font-size: 11px; font-weight: 600; letter-spacing: .8px;
+  color: var(--pf-dim); display: flex; align-items: center; gap: 6px; padding: 2px 0 }
+.pf-params summary .pf-val { margin-left: auto; font-weight: 400; letter-spacing: 0 }
+.pf-param { display: block; font-size: 11px; color: var(--pf-dim); margin: 7px 0 }
+.pf-param output { float: right; font-family: ui-monospace, Consolas, monospace; color: var(--pf-dim) }
+.pf-param input[type="range"] { width: 100%; margin: 3px 0 0; accent-color: var(--pf-accent) }
+.pf-param-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--pf-dim); margin: 7px 0 }
+.pf-param-row input[type="checkbox"] { accent-color: var(--pf-accent) }
+.pf-allrow { margin: 6px 0 2px; color: inherit }
+.pf-params input:disabled, .pf-params select:disabled { opacity: .45; cursor: default }
+
+/* 工具瓦片（PS 风格单色线性图标） */
+.pf-toolgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin: 2px 0 8px }
+.pf-toolrow { display: flex; align-items: center; gap: 5px; margin-bottom: 8px }
+.pf-lbl { font-size: 12px; color: var(--pf-dim); flex: none; margin-right: 2px }
+.pf-tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  font: inherit; font-size: 11px; color: inherit; background: var(--pf-panel); border: 1px solid var(--pf-border);
+  border-radius: 8px; padding: 7px 2px 5px; cursor: pointer }
+.pf-tile svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.25;
+  stroke-linecap: round; stroke-linejoin: round; display: block }
+.pf-tile:hover:not([disabled]) { border-color: var(--pf-accent) }
+.pf-tile[disabled] { opacity: .45; cursor: default }
+.pf-tile.icon { flex: none; width: 34px; padding: 6px 0 }
+.pf-tile.seg { flex: 1; padding: 4px 0 }
+.pf-tile.active { background: var(--pf-accent); color: var(--pf-accent-fg); border-color: transparent; font-weight: 600 }
+.pf-btn.mini { padding: 1px 7px; font-size: 11px; margin-left: 6px }
+
+/* 历史面板 */
+.pf-hist { border: 1px solid var(--pf-border); border-radius: 8px; max-height: 150px; overflow-y: auto;
+  background: var(--pf-panel2) }
+.pf-hist button { display: block; width: 100%; text-align: left; font: inherit; font-size: 11px;
+  color: var(--pf-dim); background: none; border: 0; padding: 4px 10px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.pf-hist button:hover { background: var(--pf-border) }
+.pf-hist button.cur { color: inherit; font-weight: 600 }
+.pf-hist button.future { opacity: .55 }
+.pf-hist .empty { color: var(--pf-dim); font-size: 11px; padding: 6px 10px }
+
+.pf-layer { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid var(--pf-border);
+  border-radius: 8px; margin: 6px 0; cursor: pointer }
+.pf-layer.active { border-color: var(--pf-accent) }
+.pf-layer .dot { width: 12px; height: 12px; border-radius: 3px; flex: none }
+.pf-layer span { flex: 1 }
+.pf-layer.hidden .dot, .pf-layer.hidden span { opacity: .35 }
+.pf-layer .eye { border: 0; background: none; color: var(--pf-dim); cursor: pointer; padding: 2px; font-size: 12px }
+.pf-layer .eye:hover { color: inherit }
+.pf-layers-head { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--pf-dim) }
+.pf-layers-head span { margin-right: auto }
+.pf-layers-head .pf-btn.mini { margin-left: 0 }
+.pf-ly-tag { border: 1px solid var(--pf-border); background: none; color: var(--pf-dim); border-radius: 5px;
+  font-size: 10px; padding: 1px 6px; cursor: pointer; flex: none }
+.pf-ly-tag.off { opacity: .4; text-decoration: line-through }
+.pf-ly-del { border: 0; background: none; color: var(--pf-dim); cursor: pointer; font-size: 14px; padding: 0 2px; flex: none }
+.pf-ly-del:hover { color: #e05555 }
+
+.pf-pal { display: grid; grid-template-columns: repeat(auto-fill, minmax(20px, 1fr)); gap: 4px; margin-top: 4px }
+.pf-pal div { aspect-ratio: 1; border-radius: 4px; border: 1px solid rgba(0,0,0,.2); cursor: pointer }
+.pf-pal div.sel { outline: 2px solid var(--pf-accent); outline-offset: 1px }
+.pf-pal-hint { grid-column: 1 / -1; color: var(--pf-dim); font-size: 11px; padding: 2px 0; cursor: default }
+.pf-pal-sec { font-size: 10px; letter-spacing: .6px; color: var(--pf-dim); margin: 8px 0 2px }
+.pf-mini-select { font: inherit; font-size: 11px; color: inherit; background: var(--pf-panel2);
+  border: 1px solid var(--pf-border); border-radius: 6px; padding: 2px 6px; width: 100% }
+
+/* 颜色库（折叠） */
+.pf-lib { border: 1px solid var(--pf-border); border-radius: 8px; padding: 6px 10px 10px;
+  margin-top: 14px; background: var(--pf-panel2) }
+.pf-lib summary { cursor: pointer; font-size: 11px; font-weight: 600; letter-spacing: .8px; color: var(--pf-dim) }
+.pf-lib-sec { margin-top: 4px }
+.pf-lib-sec label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--pf-dim); margin: 6px 0 }
+.pf-lib input[type="range"] { flex: 1; accent-color: var(--pf-accent) }
+.pf-lib-prev { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px }
+#lib-prev { width: 34px; height: 34px; border-radius: 6px; border: 1px solid var(--pf-border); flex: none }
+#lib-ring, #lib-sv { display: block; border-radius: 6px; margin: 6px auto; cursor: crosshair; touch-action: none }
+.pf-lib-hexrow { display: flex; gap: 6px }
+#lib-hexin { flex: 1; font: inherit; color: inherit; background: var(--pf-panel);
+  border: 1px solid var(--pf-border); border-radius: 6px; padding: 4px 8px }
+#lib-copy { width: 100%; margin-top: 8px; font-size: 12px }
+.pf-lib-btns { display: flex; gap: 6px; margin-top: 8px }
+.pf-lib-btns .pf-btn { flex: 1; font-size: 12px; padding: 4px 6px }
+
+/* 色相立方体：SV 方区 + 竖直色相条（仿 PS 拾色器） */
+.pf-cube { display: flex; gap: 7px; justify-content: center; margin-top: 6px }
+.pf-sv-wrap, .pf-hue-wrap { position: relative; width: fit-content }
+.pf-sv-wrap canvas, .pf-hue-wrap canvas { display: block; border-radius: 5px; cursor: crosshair; touch-action: none }
+.pf-sv-cur { position: absolute; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.95); box-shadow: 0 0 0 1px rgba(0,0,0,.6);
+  pointer-events: none; transform: translate(0, 0); left: -6px; top: -6px }
+.pf-hue-cur { position: absolute; left: -2px; right: -2px; height: 4px; border-radius: 2px;
+  border: 1px solid rgba(0,0,0,.6); box-shadow: 0 0 0 1px rgba(255,255,255,.8);
+  pointer-events: none; top: 0 }
+.pf-export-row.off { opacity: .4; pointer-events: none }
+.pf-lib-btns { display: flex; gap: 6px; margin-top: 8px }
+.pf-lib-btns .pf-btn { flex: 1; font-size: 12px; padding: 4px 6px }
+
+/* 手掌工具光标 */
+.pf-canvaswrap.tool-hand { cursor: grab }
+.pf-canvaswrap.tool-hand.panning { cursor: grabbing }
+
+/* 调色板右键菜单 */
+.pf-ctx { position: fixed; z-index: 60; background: var(--pf-panel); border: 1px solid var(--pf-border);
+  border-radius: 8px; box-shadow: 0 4px 18px rgba(0,0,0,.3); padding: 4px; min-width: 110px }
+.pf-ctx button { display: block; width: 100%; text-align: left; font: inherit; font-size: 12px; color: inherit;
+  background: none; border: 0; border-radius: 5px; padding: 6px 10px; cursor: pointer }
+.pf-ctx button:hover { background: var(--pf-border) }
+
+/* 转换进度弹窗 */
+.pf-prog { border: 1px solid var(--pf-border); border-radius: 12px; background: var(--pf-panel);
+  color: inherit; padding: 22px 34px; text-align: center; min-width: 240px }
+.pf-prog-spin { width: 34px; height: 34px; margin: 0 auto 12px; border-radius: 50%;
+  border: 3px solid var(--pf-border); border-top-color: var(--pf-accent); animation: pf-spin .8s linear infinite }
+@keyframes pf-spin { to { transform: rotate(360deg) } }
+.pf-prog-text { font-size: 13px; font-weight: 600 }
+.pf-prog-time { margin-top: 4px }
+
+/* 导出对话框（约 4/5 界面，仿 PS 三栏） */
+.pf-export { width: 80vw; height: 82vh; max-width: none; max-height: none; padding: 0;
+  border: 1px solid var(--pf-border); border-radius: 12px; background: var(--pf-panel); color: inherit }
+.pf-export-inner { display: grid; grid-template-columns: 270px 1fr 300px; height: 100% }
+.pf-export-list { border-right: 1px solid var(--pf-border); overflow-y: auto; padding: 10px }
+.pf-export-all { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600;
+  padding: 6px 4px; border-bottom: 1px solid var(--pf-border); margin-bottom: 6px }
+.pf-exp-row { display: flex; align-items: center; gap: 8px; padding: 8px 8px; border-radius: 8px;
+  cursor: pointer; font-size: 12px }
+.pf-exp-row:hover { background: var(--pf-panel2) }
+.pf-exp-row.cur { background: var(--pf-panel2); outline: 1px solid var(--pf-accent) }
+.pf-exp-row span:first-of-type { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.pf-export-center { display: flex; flex-direction: column; min-width: 0; background: var(--pf-panel2) }
+.pf-export-ptab { padding: 10px 14px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--pf-border);
+  background: var(--pf-panel); flex: none }
+.pf-export-stage { flex: 1; display: grid; place-items: center; overflow: auto; padding: 16px;
+  background: repeating-conic-gradient(light-dark(#e4e6ea, #1a1c21) 0 25%, light-dark(#edeef2, #20232a) 0 50%) 0 0 / 24px 24px }
+.pf-export-stage canvas { image-rendering: pixelated; box-shadow: 0 2px 14px rgba(0,0,0,.25); background: #fff }
+.pf-export-zoom { display: flex; align-items: center; justify-content: center; gap: 10px; height: 40px;
+  border-top: 1px solid var(--pf-border); background: var(--pf-panel); flex: none }
+.pf-export-opts { border-left: 1px solid var(--pf-border); overflow-y: auto; padding: 12px 14px;
+  display: flex; flex-direction: column }
+.pf-export-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--pf-dim); margin: 8px 0 }
+.pf-export-row .pf-mini-select { flex: 1 }
+.pf-export-dims label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--pf-dim); margin: 6px 0 }
+.pf-export-dims input { flex: 1; font: inherit; color: inherit; background: var(--pf-panel2);
+  border: 1px solid var(--pf-border); border-radius: 6px; padding: 4px 8px }
+.pf-export-btns { display: flex; justify-content: flex-end; gap: 8px; padding-top: 10px }
+
+.pf-status { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
+  background: var(--pf-panel); border-top: 1px solid var(--pf-border); font-size: 12px; color: var(--pf-dim); flex: none }
+.pf-status .pf-btn { padding: 3px 10px; font-size: 12px; flex: none }
+.pf-status #stat-doc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.pf-status #zoom-v { min-width: 42px; text-align: center; flex: none }
+.pf-status #stat-cursor { flex: none; margin-left: 4px }
+.pf-under { display: flex; align-items: center; gap: 6px; color: var(--pf-dim); flex: none }
+.pf-under input[type="range"] { width: 76px; accent-color: var(--pf-accent) }
+
+/* 新建画布对话框 */
+.pf-dlg { border: 1px solid var(--pf-border); border-radius: 10px; padding: 0;
+  background: var(--pf-panel); color: inherit; min-width: 300px }
+.pf-dlg-body { padding: 16px 18px }
+.pf-dlg h3 { margin: 0 0 12px; font-size: 14px }
+.pf-dlg-row { display: flex; gap: 14px; margin: 10px 0 6px }
+.pf-dlg-row label { display: flex; align-items: center; gap: 6px; color: var(--pf-dim) }
+.pf-dlg input[type="number"] { font: inherit; color: inherit; background: var(--pf-panel2);
+  border: 1px solid var(--pf-border); border-radius: 6px; padding: 4px 8px; width: 72px }
+.pf-dlg-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px }
+.pf-dlg::backdrop { background: rgba(0,0,0,.35) }
+
+@media (max-width: 780px) {
+  .pf-side { display: none }
+}

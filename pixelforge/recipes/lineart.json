@@ -1,0 +1,27 @@
+{
+  "target": { "width": 64, "height": 64 },
+  "preprocess": {
+    "bilateral": { "enable": false },
+    "levels": { "saturation": 1.0, "contrast": 1.0 },
+    "matting": { "enable": false }
+  },
+  "structure": {
+    "edge": { "dog_sigma": 1.2, "sobel_weight": 0.5 },
+    "lineart": { "mode": "onnx" }
+  },
+  "ai": { "enable": false },
+  "sampling": {
+    "mode": "weighted_mode",
+    "weights": { "edge": 2.0, "dark": 1.5, "contrast": 1.0 }
+  },
+  "quantize": {
+    "palette": { "source": "builtin", "ref": "paper", "max_colors": 1 },
+    "dither": { "mode": "off" }
+  },
+  "ink": {
+    "enable": true,
+    "opacity": 1.0,
+    "recolor": { "mode": "selective", "darken": 1.0 }
+  },
+  "post": { "despeckle": 0 }
+}
