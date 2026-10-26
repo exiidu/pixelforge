@@ -5,7 +5,7 @@ import io
 import numpy as np
 from PIL import Image
 
-from engine.io_utils import load_rgb
+from engine.io_utils import load_rgb, load_rgb_with_alpha
 
 
 def _png_bytes(img: Image.Image) -> bytes:
@@ -41,3 +41,26 @@ def test_palette_with_transparency_index():
     out = load_rgb(_png_bytes(pal))
     assert (out[0, 0] == 255).all()
     assert (out[4, 4] == [50, 150, 250]).all()
+
+
+def test_with_alpha_matches_rgb_and_keeps_mask():
+    """load_rgb_with_alpha 的 rgb 与 load_rgb 一致，alpha 反映源透明。"""
+    arr = np.zeros((10, 10, 4), np.uint8)
+    arr[..., 3] = 0
+    arr[3:7, 3:7] = [200, 30, 30, 255]
+    arr[0, 0] = [1, 2, 3, 128]  # 半透明
+    png = _png_bytes(Image.fromarray(arr, mode="RGBA"))
+
+    rgb, alpha = load_rgb_with_alpha(png)
+    assert rgb.shape == (10, 10, 3) and alpha.shape == (10, 10)
+    assert (rgb == load_rgb(png)).all()             # 与旧加载完全一致
+    assert alpha[5, 5] == 1.0                       # 不透明区
+    assert abs(float(alpha[0, 0]) - 128 / 255) < 1e-3  # 半透明保留
+    assert alpha[9, 9] == 0.0                       # 全透明区
+
+
+def test_with_alpha_opaque_has_ones():
+    img = np.zeros((6, 6, 3), np.uint8)
+    img[...] = [10, 200, 30]
+    _rgb, alpha = load_rgb_with_alpha(_png_bytes(Image.fromarray(img, mode="RGB")))
+    assert alpha.shape == (6, 6) and (alpha == 1.0).all()

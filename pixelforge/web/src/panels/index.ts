@@ -1,12 +1,50 @@
-/** 标签栏面板（多文档切换/关闭）。 */
+/** 标签栏面板（多文档切换/关闭；M5-6 拖拽重排 + 右键菜单）。 */
 
-import { closeDoc, getState, setActive, setState, subscribe, activeDoc, layerFillAt,
+import { closeDoc, closeDocsToRight, closeOtherDocs, getState, moveDoc, setActive, setState,
+  subscribe, activeDoc, layerFillAt, layerAlphaAt,
   type Tool, type Symmetry, type PaletteSort } from "../store";
 import { jumpHistory } from "../tools";
 import { ICONS } from "../icons";
 import { rgb2hsl, gammaLum, hsv2rgb, hexToRgb, rgbToHex } from "../color";
 
+/** 标签右键菜单（M5-6）：复制配方到全部 / 导出此文档 / 关闭其他 / 关闭右侧。 */
+function showTabMenu(x: number, y: number, index: number): void {
+  document.getElementById("tab-ctx")?.remove();
+  const menu = document.createElement("div");
+  menu.id = "tab-ctx";
+  menu.className = "pf-ctx";
+  menu.style.left = `${Math.min(x, window.innerWidth - 190)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - 150)}px`;
+  const items: Array<[string, () => void]> = [
+    ["复制配方到全部标签", () => document.dispatchEvent(new CustomEvent("pf:recipes-to-all", { detail: index }))],
+    ["导出此文档…", () => document.dispatchEvent(new CustomEvent("pf:export-doc", { detail: index }))],
+    ["关闭其他标签", () => {
+      const n = closeOtherDocs(index);
+      document.dispatchEvent(new CustomEvent("pf:status", { detail: n ? `已关闭其他 ${n} 个标签` : "没有可关闭的其他标签" }));
+    }],
+    ["关闭右侧标签", () => {
+      const n = closeDocsToRight(index);
+      document.dispatchEvent(new CustomEvent("pf:status", { detail: n ? `已关闭右侧 ${n} 个标签` : "右侧没有标签" }));
+    }],
+  ];
+  for (const [label, fn] of items) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.addEventListener("click", () => { fn(); menu.remove(); });
+    menu.appendChild(b);
+  }
+  document.body.appendChild(menu);
+  const close = (e: PointerEvent) => {
+    if (!menu.contains(e.target as Node)) { menu.remove(); window.removeEventListener("pointerdown", close); }
+  };
+  window.addEventListener("pointerdown", close);
+  window.addEventListener("blur", () => menu.remove(), { once: true });
+}
+
 export function mountTabs(container: HTMLElement): void {
+  let dragFrom: number | null = null;
+  let dragIndex: number | null = null;
+
   const redraw = () => {
     const { docs, activeIndex } = getState();
     container.textContent = "";
@@ -22,6 +60,8 @@ export function mountTabs(container: HTMLElement): void {
       tab.className = "pf-tab" + (i === activeIndex ? " active" : "") + (doc.dirty ? " dirty" : "");
       tab.setAttribute("role", "tab");
       tab.setAttribute("aria-selected", i === activeIndex ? "true" : "false");
+      tab.draggable = true;
+      tab.dataset.index = String(i);
 
       const dot = document.createElement("span");
       dot.className = "dot";
@@ -40,6 +80,40 @@ export function mountTabs(container: HTMLElement): void {
       tab.addEventListener("click", () => setActive(i));
       tab.addEventListener("auxclick", (e) => {
         if (e.button === 1) closeDoc(i); // 中键关闭
+      });
+      tab.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        showTabMenu(e.clientX, e.clientY, i);
+      });
+      // M5-6 拖拽重排
+      tab.addEventListener("dragstart", (e) => {
+        dragFrom = i;
+        tab.classList.add("dragging");
+        e.dataTransfer?.setData("text/plain", String(i));
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      });
+      tab.addEventListener("dragend", () => {
+        dragFrom = null;
+        dragIndex = null;
+        container.querySelectorAll(".pf-tab").forEach((t) => t.classList.remove("dragging", "drop-before", "drop-after"));
+      });
+      tab.addEventListener("dragover", (e) => {
+        if (dragFrom === null || dragFrom === i) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        const rect = tab.getBoundingClientRect();
+        const after = e.clientX > rect.left + rect.width / 2;
+        dragIndex = after ? i + 1 : i;
+        container.querySelectorAll(".pf-tab").forEach((t) => t.classList.remove("drop-before", "drop-after"));
+        tab.classList.add(after ? "drop-after" : "drop-before");
+      });
+      tab.addEventListener("drop", (e) => {
+        e.preventDefault();
+        if (dragFrom === null || dragIndex === null) return;
+        const to = dragIndex > dragFrom ? dragIndex - 1 : dragIndex;
+        moveDoc(dragFrom, Math.max(0, Math.min(docs.length - 1, to)));
+        dragFrom = null;
+        dragIndex = null;
       });
       container.appendChild(tab);
     });
@@ -85,10 +159,12 @@ export function mountLayers(container: HTMLElement): void {
       row.setAttribute("role", "button");
       row.title = isBase
         ? `${l.name}（基础层：含引擎转换内容，不可删除）`
-        : `${l.name} 点击激活`;
+        : l.bg
+          ? `${l.name}（自动拆分：透明格补边缘主色，默认隐藏=真透明；可显隐/删除）`
+          : `${l.name} 点击激活`;
       const dot = document.createElement("span");
       dot.className = "dot";
-      dot.style.background = isBase ? "#7fbf5f" : "#3a6ea5";
+      dot.style.background = isBase ? "#7fbf5f" : l.bg ? "#b08bd8" : "#3a6ea5";
       const label = document.createElement("span");
       label.textContent = l.name;
       row.append(dot, label);
@@ -141,7 +217,30 @@ export function mountLayers(container: HTMLElement): void {
   redraw();
 }
 
-/** 调色板面板：文档颜色（上）+ 自定义色架（下，左键拖动排序/右键删除），排序下拉对两组生效。 */
+/** 轻量「已删除 · 撤销」浮条（M5.2/B2）：色架是全局跨文档状态，不接入文档历史栈。 */
+let toastTimer = 0;
+function showUndoToast(text: string, onUndo: () => void): void {
+  let el = document.getElementById("pf-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "pf-toast";
+    el.className = "pf-toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = "";
+  const span = document.createElement("span");
+  span.textContent = text;
+  const btn = document.createElement("button");
+  btn.className = "pf-btn mini";
+  btn.textContent = "撤销";
+  const box = el;
+  btn.addEventListener("click", () => { onUndo(); box.remove(); });
+  el.append(span, btn);
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => box.remove(), 5000);
+}
+
+/** 调色板面板：文档颜色（上）+ 自定义色架（下，左键选用/右键删除），排序下拉对两组生效。 */
 export function mountPalette(
   container: HTMLElement, countEl: HTMLElement | null,
   customEl: HTMLElement | null, sortSel: HTMLSelectElement | null,
@@ -191,8 +290,20 @@ export function mountPalette(
   document.getElementById("pal-ctx-del")?.addEventListener("click", () => {
     const menu = document.getElementById("pal-ctx");
     const hex = menu?.dataset.hex;
-    if (hex) setState({ customColors: getState().customColors.filter((c) => c !== hex) });
     hideCtxMenu();
+    if (!hex) return;
+    const before = getState().customColors;
+    const at = before.indexOf(hex);
+    if (at < 0) return;
+    setState({ customColors: before.filter((c) => c !== hex) });
+    showUndoToast(`已删除色架颜色 ${hex}`, () => {
+      const now = getState().customColors;
+      if (now.includes(hex)) return;
+      const next = [...now];
+      next.splice(Math.min(at, next.length), 0, hex); // 恢复原位
+      setState({ customColors: next });
+      document.dispatchEvent(new CustomEvent("pf:status", { detail: `已恢复 ${hex}` }));
+    });
   });
   window.addEventListener("pointerdown", (e) => {
     const menu = document.getElementById("pal-ctx");
@@ -248,14 +359,16 @@ export function mountPalette(
       return;
     }
     const counts = new Map<number, number>();
-    // 跨可见图层合成计数（与画布所见一致）
+    // 跨可见图层合成计数（与画布所见一致：上层透明露出下层，透明格不计）
     for (let i = 0; i < doc.w * doc.h; i++) {
       let idx = -1;
       for (let k = doc.layers.length - 1; k >= 0; k--) {
         const l = doc.layers[k];
         if (!l.visible) continue;
         const f = layerFillAt(doc, l, i);
-        if (f >= 0) { idx = f; break; }
+        if (f < 0) continue;
+        if (layerAlphaAt(doc, l, i) <= 0) continue;
+        idx = f; break;
       }
       if (idx < 0) continue;
       counts.set(idx, (counts.get(idx) ?? 0) + 1);
@@ -474,6 +587,9 @@ export function mountColorLib(root: HTMLElement): void {
   root.querySelector("#lib-add")?.addEventListener("click", () => {
     document.dispatchEvent(new CustomEvent("pf:custom-color", { detail: { rgb: curRgb() } }));
   });
+  root.querySelector("#lib-replace")?.addEventListener("click", () => {
+    document.dispatchEvent(new CustomEvent("pf:replace-color", { detail: { rgb: curRgb() } }));
+  });
   root.querySelector("#lib-copy")?.addEventListener("click", () => {
     const doc = activeDoc();
     const c = doc?.palette[getState().colorIndex] ?? curRgb();
@@ -494,6 +610,7 @@ export function mountTools(): void {
     ["bucket", "tool-bucket", "油漆桶（G）· 泛洪同色连通区"],
     ["picker", "tool-picker", "取色（I）"],
     ["detail", "tool-detail", "细节（D）· 标记局部重算区域（Alt 擦除）"],
+    ["alpha", "tool-alpha", "抠背景（W）· 拖拽刷透明、Alt 恢复、Shift+点按色抠除整片同色背景"],
     ["line", "tool-line", "直线（L）· 拖拽画线"],
     ["rect", "tool-rect", "矩形（R）· 拖拽画框，按住 Shift 填充"],
     ["ellipse", "tool-ellipse", "椭圆（O）· 拖拽画椭圆，按住 Shift 填充"],

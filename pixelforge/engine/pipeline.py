@@ -20,6 +20,28 @@ from engine.ai.stub import UnavailableProvider
 from engine.recipe import Recipe
 from engine.types import ConversionArtifacts, ConversionResult, IndexGrid, Palette, RGBImage
 
+# M5-0 网格 alpha：源区 alpha 均值 < 该阈值记透明（像素画按格二值化）
+ALPHA_TRANSPARENT_THRESHOLD = 0.35
+
+
+def grid_alpha(alpha: np.ndarray, mapping, threshold: float = ALPHA_TRANSPARENT_THRESHOLD) -> np.ndarray:
+    """源分辨率 alpha (H, W) 0..1 → 网格 (th, tw) uint8 0/1（源区均值 ≥ 阈值记不透明）。
+
+    用与 S2 采样相同的网格归属，保证 alpha 格与 fill 格一一对应。
+    无源像素落入的格子（放大时 build_mapping 会留空档）无 alpha 信息 → 记不透明，
+    避免把"没有数据"误判成透明。
+    """
+    a = np.asarray(alpha, dtype=np.float64)
+    if a.shape[:2] != mapping.src_shape:
+        raise ValueError(f"alpha 尺寸必须为 {mapping.src_shape}，实际 {a.shape[:2]}")
+    th, tw = mapping.grid_shape
+    n_cells = th * tw
+    counts = np.bincount(mapping.cell_index, minlength=n_cells).astype(np.float64)
+    sums = np.bincount(mapping.cell_index, weights=a.reshape(-1), minlength=n_cells)
+    mean = sums / np.maximum(counts, 1.0)
+    opaque = (counts <= 0) | (mean >= threshold)
+    return opaque.astype(np.uint8).reshape(th, tw)
+
 
 @dataclass
 class AIProviders:
@@ -57,9 +79,18 @@ class ConversionPipeline:
         self._art_cache: dict[str, ConversionArtifacts] = {}
 
     # ------------------------------------------------------------------
-    def run(self, image: RGBImage, recipe: Recipe) -> ConversionResult:
+    def run(
+        self, image: RGBImage, recipe: Recipe, alpha: np.ndarray | None = None
+    ) -> ConversionResult:
         art = self._precompute(image, recipe)
-        return self._grid_stages(image, art, recipe)
+        result = self._grid_stages(image, art, recipe)
+        if alpha is not None:
+            from engine.core.grid import build_mapping
+
+            tw, th = recipe.target_for(art.P0.shape[:2])
+            mapping = build_mapping(art.P0.shape[:2], (th, tw))
+            result.alpha = grid_alpha(alpha, mapping)
+        return result
 
     def rerun_region(
         self,
@@ -85,7 +116,7 @@ class ConversionPipeline:
         from engine.stages import s2_sampling
 
         t0 = time.perf_counter()
-        tw, th = recipe.target_wh
+        th, tw = base.fill.data.shape  # 网格以 base 为准（可能非正方形）
         mask = np.asarray(region, dtype=bool)
         if mask.shape != (th, tw):
             raise ValueError(f"区域掩码尺寸必须为 {tw}×{th}，实际 {mask.shape[::-1]}")
@@ -99,7 +130,7 @@ class ConversionPipeline:
         merged = Recipe(raw=raw)
 
         art = self._precompute(image, recipe)  # preprocess/structure 未变 → 命中缓存
-        small = s2_sampling.run(art.P0, art.E, merged, recipe.target_wh)
+        small = s2_sampling.run(art.P0, art.E, merged, (tw, th))
 
         palette = base.palette
         appended = 0
@@ -142,6 +173,7 @@ class ConversionPipeline:
             ink=base.ink,  # 墨线原样保留
             palette=palette,
             meta=meta,
+            alpha=base.alpha,  # M5-0：网格 alpha 与 fill 正交，重算不改
         )
 
     # ------------------------------------------------------------------
@@ -165,10 +197,11 @@ class ConversionPipeline:
         from engine.stages import s2_sampling, s3_quantize, s4_ink, s5_post
 
         t0 = time.perf_counter()
-        small = s2_sampling.run(art.P0, art.E, recipe, recipe.target_wh)
+        tw, th = recipe.target_for(art.P0.shape[:2])  # 可能非正方形（preserve_aspect）
+        small = s2_sampling.run(art.P0, art.E, recipe, (tw, th))
         fill, palette = s3_quantize.run(small, recipe)
 
-        meta: dict = {"recipe": recipe.raw, "size": recipe.target_wh}
+        meta: dict = {"recipe": recipe.raw, "size": (tw, th)}
         ink = None
         if recipe.raw["ink"]["enable"]:
             if art.L is None:

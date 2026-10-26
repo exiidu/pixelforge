@@ -93,6 +93,24 @@ def _load_image(path: str) -> np.ndarray:
     return img
 
 
+def _load_image_rgba(path: str) -> tuple[np.ndarray, np.ndarray]:
+    """加载为 (rgb, alpha)：alpha 为源分辨率 (H, W) float32 0..1（M5-0）。"""
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    if not p.exists():
+        raise HTTPException(404, f"图片不存在: {p}")
+    from engine.io_utils import load_rgb_with_alpha
+
+    try:
+        rgb, alpha = load_rgb_with_alpha(p)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"图片无法解析: {e}") from e
+    if rgb.ndim != 3 or rgb.shape[2] != 3:
+        raise HTTPException(400, "非常规 RGB 图片")
+    return rgb, alpha
+
+
 def _png_b64(arr: np.ndarray, mode: str) -> str:
     buf = io.BytesIO()
     Image.fromarray(arr, mode=mode).save(buf, format="PNG")
@@ -108,6 +126,16 @@ def _thumb_b64(image: np.ndarray) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
+def _alpha_png(result) -> str | None:
+    """网格 alpha → 灰度 PNG base64；无透明格（或未携带 alpha）返回 None（前端回退边缘泛洪）。"""
+    if result.alpha is None:
+        return None
+    a = np.asarray(result.alpha, dtype=np.uint8)
+    if a.size == 0 or (a != 0).all():  # 无透明格：视作"无 alpha 素材"
+        return None
+    return _png_b64(a * 255, "L")
+
+
 def _result_payload(job_id: str, result, source_png: str | None = None) -> dict:
     preview = s5_post.composite_preview(result, scale=1)
     buf = io.BytesIO()
@@ -119,6 +147,7 @@ def _result_payload(job_id: str, result, source_png: str | None = None) -> dict:
         "palette": result.palette.colors.tolist(),
         "fill": result.fill.data.tolist(),
         "ink": result.ink.data.tolist() if result.ink is not None else None,
+        "alpha_png": _alpha_png(result),
         "preview_png": base64.b64encode(buf.getvalue()).decode(),
         "source_png": source_png,
         "meta": {k: v for k, v in result.meta.items() if k != "recipe"},
@@ -126,8 +155,8 @@ def _result_payload(job_id: str, result, source_png: str | None = None) -> dict:
     }
 
 
-def _convert(image: np.ndarray, recipe: Recipe) -> dict:
-    result = _pipeline.run(image, recipe)
+def _convert(image: np.ndarray, recipe: Recipe, alpha: np.ndarray | None = None) -> dict:
+    result = _pipeline.run(image, recipe, alpha)
     job_id = uuid.uuid4().hex[:12]
     _JOBS[job_id] = {"image": image, "recipe": recipe, "result": result}
     # 源图缩略（编辑器对比浮层 / 描图底图用）
@@ -158,9 +187,9 @@ def health():
 
 @app.post("/api/convert")
 def convert(req: ConvertRequest):
-    image = _load_image(req.image_path)
+    image, alpha = _load_image_rgba(req.image_path)
     recipe = load_recipe(req.recipe, req.overrides)
-    return _convert(image, recipe)
+    return _convert(image, recipe, alpha)
 
 
 @app.post("/api/convert_file")
@@ -170,16 +199,16 @@ async def convert_file(
     overrides: str | None = Form(None),
 ):
     raw = await file.read()
-    from engine.io_utils import load_rgb as _load_rgb
+    from engine.io_utils import load_rgb_with_alpha as _load_rgba
 
     try:
-        image = _load_rgb(raw)
+        image, alpha = _load_rgba(raw)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"上传图片无法解析: {e}") from e
     ov = json.loads(overrides) if overrides else None
     dest = UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{Path(file.filename or 'img').name}"
     dest.write_bytes(raw)
-    return _convert(image, load_recipe(recipe, ov))
+    return _convert(image, load_recipe(recipe, ov), alpha)
 
 
 @app.get("/api/stage/{job_id}/{stage}")
@@ -294,6 +323,65 @@ def matting(req: MattingRequest):
         "width": int(image.shape[1]),
         "height": int(image.shape[0]),
         "png": base64.b64encode(buf.getvalue()).decode(),
+    }
+
+
+class ExportIndexedRequest(BaseModel):
+    palette: list[list[int]]        # 网格索引引用的调色板（N×3，RGB）
+    indices: list[list[int]]        # 网格索引（h×w），-1 = 透明
+    width: int | None = None        # 目标输出宽（最近邻放大）；空 = 原网格尺寸
+    height: int | None = None
+
+
+@app.post("/api/export_indexed")
+def export_indexed(req: ExportIndexedRequest):
+    """把前端最终的索引网格写成带 PLTE(+tRNS) 的索引 PNG（游戏引擎/像素工具友好）。
+
+    输出调色板只保留实际用到的颜色；存在透明格时前置一个占位色并在 tRNS 中记 alpha=0。
+    """
+    grid = np.asarray(req.indices, dtype=np.int32)
+    if grid.ndim != 2 or grid.size == 0:
+        raise HTTPException(400, "indices 必须是二维非空数组")
+    pal = np.asarray(req.palette, dtype=np.int32)
+    if pal.ndim != 2 or pal.shape[1] != 3:
+        raise HTTPException(400, "palette 必须是 N×3 的 RGB 列表")
+    h, w = grid.shape
+    transparent = bool((grid < 0).any())
+    used = sorted({int(v) for v in np.unique(grid) if v >= 0})
+    if any(v >= len(pal) for v in used):
+        raise HTTPException(400, "indices 超出调色板范围")
+    offset = 1 if transparent else 0
+    if len(used) + offset > 256:
+        raise HTTPException(
+            400, f"索引 PNG 最多 256 色（含透明占位），当前需 {len(used) + offset} 色，请先降色数"
+        )
+
+    out = np.zeros((h, w), dtype=np.uint8)
+    for i, k in enumerate(used):
+        out[grid == k] = i + offset
+    img = Image.fromarray(out, mode="P")
+    entries = ([[0, 0, 0]] if transparent else []) + [pal[k].tolist() for k in used]
+    flat = [c for e in entries for c in e]
+    img.putpalette(flat + [0] * (768 - len(flat)))
+
+    tw = int(req.width or w)
+    th = int(req.height or h)
+    if not (1 <= tw <= 8192 and 1 <= th <= 8192):
+        raise HTTPException(400, "输出尺寸需在 1..8192")
+    if (tw, th) != (w, h):
+        img = img.resize((tw, th), Image.NEAREST)
+
+    buf = io.BytesIO()
+    if transparent:
+        img.save(buf, format="PNG", transparency=bytes([0] + [255] * len(used)))
+    else:
+        img.save(buf, format="PNG")
+    return {
+        "png": base64.b64encode(buf.getvalue()).decode(),
+        "width": tw,
+        "height": th,
+        "colors": len(entries),
+        "transparent": transparent,
     }
 
 

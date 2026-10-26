@@ -13,10 +13,16 @@ from pathlib import Path
 RECIPES_DIR = Path(__file__).resolve().parent.parent / "recipes"
 
 DEFAULT_RECIPE: dict = {
-    "target": {"width": 64, "height": 64},
+    "target": {"width": 64, "height": 64, "preserve_aspect": False},
     "preprocess": {
         "bilateral": {"enable": True, "radius": 3, "strength": 0.6},
-        "levels": {"saturation": 1.15, "contrast": 1.05},
+        "levels": {
+            "saturation": 1.15,
+            "contrast": 1.05,
+            # M5.3 亮部对比增强（亮度自适应：只动亮区，暗部/中间调不变）；0 = 关（默认，行为同改动前）
+            "bright_contrast": 0.0,
+            "bright_start": 0.6,
+        },
         "matting": {"enable": False},
     },
     "structure": {
@@ -37,7 +43,13 @@ DEFAULT_RECIPE: dict = {
         "regions": [],            # v1.5: [{mask, override}]
     },
     "quantize": {
-        "palette": {"source": "extract", "ref": None, "max_colors": 64},
+        "palette": {
+            "source": "extract",
+            "ref": None,
+            "max_colors": 64,
+            # M5-4 色板锁定：重转换时强制保留的颜色（≤32），从提取预算中扣减、追加到色板尾部
+            "seed_colors": [],
+        },
         "dither": {"mode": "off", "matrix": 4},
     },
     "ink": {
@@ -66,6 +78,24 @@ class Recipe:
     def target_wh(self) -> tuple[int, int]:
         t = self.raw["target"]
         return int(t["width"]), int(t["height"])
+
+    def target_for(self, src_shape: tuple[int, int]) -> tuple[int, int]:
+        """解析实际网格 (tw, th)。
+
+        preserve_aspect=True 时按源图宽高比、**长边等于 target 的长边**取整，
+        避免非正方形素材被强行拉成正方形。默认 False → 引擎行为与既有调用完全不变
+        （编辑器导入时显式传 true）。
+        """
+        tw, th = self.target_wh
+        if not self.raw["target"].get("preserve_aspect"):
+            return tw, th
+        H, W = src_shape
+        if W <= 0 or H <= 0 or W == H:
+            return tw, th
+        long_side = max(tw, th)
+        if W >= H:  # 源更宽 → 网格宽为长边
+            return long_side, max(1, round(long_side * H / W))
+        return max(1, round(long_side * W / H)), long_side
 
 
 def load_recipe(path: str | Path | None = None, overrides: dict | None = None) -> Recipe:

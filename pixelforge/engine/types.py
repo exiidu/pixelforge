@@ -56,3 +56,5 @@ class ConversionResult:
     ink: IndexGrid | None
     palette: Palette
     meta: dict = field(default_factory=dict)  # recipe 快照、耗时等
+    # M5-0 与 fill 正交的网格 alpha：uint8 (h, w)，0=透明 1=不透明；None=未携带
+    alpha: np.ndarray | None = None

@@ -32,7 +32,7 @@ def sample_mean(image: RGBImage, mapping: GridMapping) -> RGBImage:
     th, tw = mapping.grid_shape
     n_cells = th * tw
     lin = srgb_to_linear(image).reshape(-1, 3).astype(np.float64)
-    counts = np.bincount(mapping.cell_index, minlength=n_cells).astype(np.float64)
+    counts = np.maximum(np.bincount(mapping.cell_index, minlength=n_cells), 1).astype(np.float64)
     out = np.empty((n_cells, 3), dtype=np.float64)
     for c in range(3):
         out[:, c] = np.bincount(
@@ -136,10 +136,23 @@ def sample_weighted_mode(
     blend = (w2 > 0) & (w0 < soft_ratio * w2) & (d02 < _BLEND_DELTA)
     final = np.where(
         blend[:, None],
-        (c0 * w0[:, None] + c2 * w2[:, None]) / (w0 + w2)[:, None],
+        (c0 * w0[:, None] + c2 * w2[:, None]) / np.maximum(w0 + w2, 1e-9)[:, None],
         c0,
     )
     return linear_to_srgb(final.reshape(th, tw, 3))
+
+
+def fill_empty_cells(small: RGBImage, image: RGBImage, mapping: GridMapping) -> RGBImage:
+    """回填空档格（放大网格时源像素数 < 格数）：取该格代表源像素的颜色。
+
+    缩小/等尺寸时 covered 全 True，原样返回（零开销、结果不变）。
+    """
+    if mapping.covered.all():
+        return small
+    out = small.copy()
+    empties = np.flatnonzero(~mapping.covered)
+    out.reshape(-1, 3)[empties] = image.reshape(-1, 3)[mapping.cell_src[empties]]
+    return out
 
 
 def run(
@@ -150,9 +163,9 @@ def run(
     s = recipe.raw["sampling"]
     weights = s.get("weights", {})
     if s["mode"] == "mean":
-        return sample_mean(P0, mapping)
-    if s["mode"] == "weighted_mode":
-        return sample_weighted_mode(
+        out = sample_mean(P0, mapping)
+    elif s["mode"] == "weighted_mode":
+        out = sample_weighted_mode(
             P0,
             mapping,
             E,
@@ -162,4 +175,7 @@ def run(
             soft_ratio=float(s.get("soft_ratio", 1.4)),
             merge_delta=float(s.get("merge_delta", 0.05)),
         )
-    raise NotImplementedError(f"采样模式未实现: {s['mode']}（layered 留 v2）")
+    else:
+        raise NotImplementedError(f"采样模式未实现: {s['mode']}（layered 留 v2）")
+    # 放大网格的空档格没有源像素可采（会落成黑），用代表源像素回填，避免黑色发丝线
+    return fill_empty_cells(out, P0, mapping)

@@ -3,13 +3,14 @@
 
 import {
   activeDoc, activeLayer, getState, setState, updateDoc, layerById,
-  layerFillAt, layerInkAt, mkLayer,
-  type BasePatch, type CellOp, type CellOverride, type EditorDoc, type HistEntry, type HistStep, type Rect,
+  layerFillAt, layerInkAt, layerAlphaAt, mkLayer,
+  type BasePatch, type CellOp, type CellOverride, type EditorDoc, type HistEntry, type HistStep,
+  type IndexRemap, type Rect,
 } from "./store";
 import { invalidateBitmaps } from "./render";
-import { transformPalette } from "./color";
+import { rgbToOklab, transformPalette } from "./color";
 
-type Layer = "fill" | "ink";
+type Layer = "fill" | "ink" | "alpha";
 
 export function effFill(doc: EditorDoc, i: number): number {
   const l = activeLayer(doc);
@@ -20,16 +21,20 @@ export function effInk(doc: EditorDoc, i: number): number {
   return l ? layerInkAt(doc, l, i) : -1;
 }
 
-/** 文档合成可见 fill（自顶向下取第一层非透明格）——取色/磁吸等按所见取。 */
+/** 文档合成可见 fill（自顶向下取第一层不透明格）——取色/磁吸等按所见取。 */
 export function compositeFill(doc: EditorDoc, i: number): number {
   for (let k = doc.layers.length - 1; k >= 0; k--) {
     const l = doc.layers[k];
     if (!l.visible) continue;
     const f = layerFillAt(doc, l, i);
-    if (f >= 0) return f;
+    if (f < 0) continue;
+    if (layerAlphaAt(doc, l, i) <= 0) continue; // 上层透明 → 露出下层
+    return f;
   }
   return -1;
 }
+
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 
 /* ------------------------------------------------------------- 选区 scope */
 
@@ -82,12 +87,14 @@ function applyLayerOps(layer: { data: Map<number, CellOverride> }, ops: CellOp[]
  *  entry.layerFx：操作新建/删除的图层（redo/undo 各自还原图层存在性）。 */
 function pushEntry(doc: EditorDoc, entry: HistEntry): void {
   const n = entry.steps.reduce((n, s) => n + s.ops.length, 0);
-  if (n === 0 && !entry.layerFx && !entry.base) return;
+  if (n === 0 && !entry.layerFx && !entry.base && !entry.palette && !entry.remap) return;
   for (const s of entry.steps) {
     const layer = layerById(doc, s.layerId);
     if (layer) applyLayerOps(layer, s.ops, "after");
   }
   if (entry.base) applyBasePatch(doc, entry.base, "after");
+  if (entry.palette) applyPalette(doc, entry.palette.after);
+  if (entry.remap) applyRemap(doc, entry.remap, "after");
   doc.history.undo.push(entry);
   if (doc.history.undo.length > 100) doc.history.undo.shift();
   doc.history.redo.length = 0;
@@ -104,6 +111,14 @@ function commitLayer(doc: EditorDoc, layerId: string, ops: CellOp[], label: stri
   commit(doc, label, [{ layerId, ops }]);
 }
 
+/** 整板替换（改板不改画）：paletteBase 换新、显示色板按 paletteFx 重算，格索引不动。 */
+function applyPalette(doc: EditorDoc, colors: [number, number, number][]): void {
+  doc.paletteBase = colors.map((c) => [...c] as [number, number, number]);
+  doc.palette = transformPalette(doc.paletteBase, doc.paletteFx);
+  doc._palBefore = undefined;
+  if (getState().colorIndex >= doc.paletteBase.length) setState({ colorIndex: 0 });
+}
+
 /** base 层局部补丁（细节重算）：恢复 fill/ink 与色板（含尾部追加色）。 */
 function applyBasePatch(doc: EditorDoc, patch: BasePatch, mode: "before" | "after"): void {
   const fill = mode === "before" ? patch.beforeFill : patch.afterFill;
@@ -113,11 +128,103 @@ function applyBasePatch(doc: EditorDoc, patch: BasePatch, mode: "before" | "afte
     doc.fill[i] = fill[k];
     if (doc.ink && ink[k] !== null) doc.ink[i] = ink[k]!;
   }
-  const pal = mode === "before" ? patch.paletteBefore : patch.paletteAfter;
-  doc.paletteBase = pal.map((c) => [...c] as [number, number, number]);
-  doc.palette = transformPalette(doc.paletteBase, doc.paletteFx);
-  doc._palBefore = undefined;
-  if (getState().colorIndex >= doc.paletteBase.length) setState({ colorIndex: 0 });
+  applyPalette(doc, mode === "before" ? patch.paletteBefore : patch.paletteAfter);
+}
+
+/** M5.2/B3：整表索引重映射（base fill/ink + 显示色板）。最近色映射不可逆，用快照回滚。 */
+function applyRemap(doc: EditorDoc, r: IndexRemap, mode: "before" | "after"): void {
+  const fill = mode === "before" ? r.beforeFill : r.afterFill;
+  const ink = mode === "before" ? r.beforeInk : r.afterInk;
+  doc.fill.set(fill.subarray(0, Math.min(doc.fill.length, fill.length)));
+  if (doc.ink && ink) doc.ink.set(ink.subarray(0, Math.min(doc.ink.length, ink.length)));
+  applyPalette(doc, mode === "before" ? r.paletteBefore : r.paletteAfter);
+}
+
+/** 旧板 → 新板的最近色索引映射（OKLab 欧氏距离平方）。 */
+function nearestIndexMap(
+  oldPal: [number, number, number][], newPal: [number, number, number][],
+): number[] {
+  const newLabs = newPal.map(rgbToOklab);
+  return oldPal.map((c) => {
+    const lab = rgbToOklab(c);
+    let best = 0, bd = Infinity;
+    for (let k = 0; k < newLabs.length; k++) {
+      const p = newLabs[k];
+      const d = (lab[0] - p[0]) ** 2 + (lab[1] - p[1]) ** 2 + (lab[2] - p[2]) ** 2;
+      if (d < bd) { bd = d; best = k; }
+    }
+    return best;
+  });
+}
+
+/** M5.3：色板整体替换入历史（单色编辑 / 导入色板）。 */
+export function commitPalette(
+  doc: EditorDoc, before: [number, number, number][], after: [number, number, number][], label: string,
+): void {
+  pushEntry(doc, { label, steps: [], palette: { before, after } });
+}
+
+/** M5.2/B3：导入色板 + 按 OKLab 最近色重映射全部索引（不再出现超出索引的品红格）。
+ *  一条历史条目（base fill/ink 快照 + 图层 override 的稀疏 steps），可一键撤销。返回改写的格子数。 */
+export function setPaletteBaseWithRemap(
+  doc: EditorDoc, colors: [number, number, number][], label: string,
+): number {
+  if (!colors.length) return 0;
+  const map = nearestIndexMap(doc.paletteBase, colors);
+  const remapGrid = (src: Int32Array): Int32Array => {
+    const out = src.slice();
+    for (let i = 0; i < out.length; i++) if (out[i] >= 0) out[i] = map[out[i]] ?? 0;
+    return out;
+  };
+  const beforeFill = doc.fill.slice();
+  const afterFill = remapGrid(doc.fill);
+  const beforeInk = doc.ink ? doc.ink.slice() : null;
+  const afterInk = doc.ink ? remapGrid(doc.ink) : null;
+  let changed = 0;
+  for (let i = 0; i < afterFill.length; i++) if (afterFill[i] !== beforeFill[i]) changed++;
+
+  const steps: HistStep[] = [];
+  for (const l of doc.layers) {
+    const ops: CellOp[] = [];
+    for (const [i, ov] of l.data) {
+      const nf = ov.fill !== undefined && ov.fill >= 0 ? (map[ov.fill] ?? 0) : ov.fill;
+      const ni = ov.ink !== undefined && ov.ink >= 0 ? (map[ov.ink] ?? 0) : ov.ink;
+      if (nf === ov.fill && ni === ov.ink) continue;
+      const after: CellOverride = {};
+      if (nf !== undefined) after.fill = nf;
+      if (ni !== undefined) after.ink = ni;
+      if (ov.alpha !== undefined) after.alpha = ov.alpha;
+      ops.push({ i, before: { ...ov }, after });
+    }
+    if (ops.length) steps.push({ layerId: l.id, ops });
+  }
+  pushEntry(doc, {
+    label, steps,
+    remap: {
+      beforeFill, afterFill, beforeInk, afterInk,
+      paletteBefore: paletteSnapshot(doc),
+      paletteAfter: colors.map((c) => [...c] as [number, number, number]),
+    },
+  });
+  return changed;
+}
+
+export function paletteSnapshot(doc: EditorDoc): [number, number, number][] {
+  return doc.paletteBase.map((c) => [...c] as [number, number, number]);
+}
+
+/** 单色编辑：改 paletteBase[k]（索引不动、可撤销）。颜色未变返回 false。 */
+export function setPaletteColor(
+  doc: EditorDoc, k: number, rgb: [number, number, number], label = "改色",
+): boolean {
+  if (k < 0 || k >= doc.paletteBase.length) return false;
+  const cur = doc.paletteBase[k];
+  if (cur[0] === rgb[0] && cur[1] === rgb[1] && cur[2] === rgb[2]) return false;
+  const before = paletteSnapshot(doc);
+  const after = before.map((c) => [...c] as [number, number, number]);
+  after[k] = [rgb[0], rgb[1], rgb[2]];
+  commitPalette(doc, before, after, label);
+  return true;
 }
 
 /** M4：细节重算结果入历史（base 补丁；撤销/重做连色板追加一起回滚）。 */
@@ -159,10 +266,18 @@ function stampFrom(
       if (cur?.fill === value) return;
       after = { ...(cur ?? {}), fill: value };
     }
-  } else {
+  } else if (layer === "ink") {
     const v = value === "erase" ? -1 : value;
     if (cur?.ink === v) return;
     after = { ...(cur ?? {}), ink: v };
+  } else {
+    // alpha：0=透明 1=不透明；erase=恢复（删除 alpha 槽，回落本层 base 的 alpha）
+    const v = value === "erase" ? undefined : value;
+    if (cur?.alpha === v) return;
+    const next: CellOverride = { ...(cur ?? {}) };
+    if (v === undefined) delete next.alpha;
+    else next.alpha = v;
+    after = Object.keys(next).length ? next : undefined;
   }
   ops.push({ i: _i, before: cur ? { ...cur } : undefined, after });
 }
@@ -356,9 +471,9 @@ export function shapePreviewEnd(doc: EditorDoc): void {
   updateDoc(doc, {});
 }
 
-/** 一次成型提交（油漆桶/形状/选区操作用）：含对称、选区裁剪。写活动层 fill 槽。 */
+/** 一次成型提交（油漆桶/形状/选区操作用）：含对称、选区裁剪。写活动层指定槽。 */
 export function paintCells(
-  doc: EditorDoc, cells: Array<[number, number]>, _layer: Layer, value: number | "erase",
+  doc: EditorDoc, cells: Array<[number, number]>, slot: Layer, value: number | "erase",
   label: string,
 ): void {
   const l = activeLayer(doc);
@@ -370,15 +485,15 @@ export function paintCells(
     if (seen.has(i)) continue;
     seen.add(i);
     const cur = l.data.get(i);
-    stampFrom(doc, i, "fill", value, ops, cur ? { ...cur } : undefined);
+    stampFrom(doc, i, slot, value, ops, cur ? { ...cur } : undefined);
   }
   commitLayer(doc, l.id, ops, label);
 }
 
-/** 把 cells 追加进当前笔画（铅笔/橡皮；须在 beginStroke 之后）。写笔画起始层的 fill 槽。
+/** 把 cells 追加进当前笔画（铅笔/橡皮/抠背景；须在 beginStroke 之后）。写笔画起始层的指定槽。
  *  返回本次实际变更的格号（供实时笔迹做脏格补丁）。 */
 export function stampCells(
-  doc: EditorDoc, cells: Array<[number, number]>, _layer: Layer, value: number | "erase",
+  doc: EditorDoc, cells: Array<[number, number]>, slot: Layer, value: number | "erase",
 ): number[] {
   const changed: number[] = [];
   if (!strokeOps) return changed;
@@ -390,7 +505,7 @@ export function stampCells(
     const before = k !== undefined ? strokeOps[k].before : (l.data.get(i) ? { ...l.data.get(i) } : undefined);
     const cur = k !== undefined ? (strokeOps[k].after ? { ...strokeOps[k].after } : undefined) : before;
     const tmp: CellOp[] = [];
-    stampFrom(doc, i, "fill", value, tmp, cur);
+    stampFrom(doc, i, slot, value, tmp, cur);
     if (!tmp.length) continue;
     const op: CellOp = { i, before, after: tmp[0].after };
     if (k !== undefined) strokeOps[k] = op;
@@ -400,6 +515,58 @@ export function stampCells(
     changed.push(i);
   }
   return changed;
+}
+
+/* ------------------------------------------------------------- 抠背景（M5-0）
+
+ * 手动刷 alpha=0 走 stampCells(slot="alpha")；「按色抠除」一次泛洪同色连通域。 */
+
+/** 一次把 cells 抠成透明（写入活动层 alpha 槽=0），整片一笔入历史。 */
+export function paintAlphaCells(
+  doc: EditorDoc, cells: Array<[number, number]>, label: string, erase = false,
+): number[] {
+  const l = activeLayer(doc);
+  if (!l) return [];
+  const ops: CellOp[] = [];
+  const seen = new Set<number>();
+  const changed: number[] = [];
+  for (const [x, y] of cells) {
+    if (!inGrid(doc, x, y)) continue;
+    const i = y * doc.w + x;
+    if (seen.has(i)) continue;
+    seen.add(i);
+    const cur = l.data.get(i);
+    const tmp: CellOp[] = [];
+    stampFrom(doc, i, "alpha", erase ? "erase" : 0, tmp, cur ? { ...cur } : undefined);
+    if (tmp.length) { ops.push(tmp[0]); changed.push(i); }
+  }
+  commitLayer(doc, l.id, ops, label);
+  return changed;
+}
+
+/** 「按色抠除」：从点击处泛洪同色连通域（所见合成色），一次清掉整片背景。返回改动格数。 */
+export function magicAlphaErase(doc: EditorDoc, sx: number, sy: number): number {
+  if (!scopeHas(doc, sx, sy)) return 0;
+  const seedI = sy * doc.w + sx;
+  const target = compositeFill(doc, seedI);
+  if (target < 0) return 0; // 该处本已透明 / 无内容
+  const visited = new Set<number>([seedI]);
+  const queue: number[] = [seedI];
+  const cells: Array<[number, number]> = [];
+  while (queue.length) {
+    const i = queue.pop()!;
+    cells.push([i % doc.w, Math.floor(i / doc.w)]);
+    const x = i % doc.w, y = Math.floor(i / doc.w);
+    for (const [ox, oy] of DIRS) {
+      const nx = x + ox, ny = y + oy;
+      if (!scopeHas(doc, nx, ny)) continue;
+      const j = ny * doc.w + nx;
+      if (visited.has(j) || compositeFill(doc, j) !== target) continue;
+      visited.add(j);
+      queue.push(j);
+    }
+  }
+  return paintAlphaCells(doc, cells, "按色抠除").length;
 }
 
 /* ------------------------------------------------------------- 油漆桶 */
@@ -740,6 +907,8 @@ export function undo(): void {
     if (l) applyLayerOps(l, step.ops, "before");
   }
   if (entry.base) applyBasePatch(doc, entry.base, "before");
+  if (entry.palette) applyPalette(doc, entry.palette.before);
+  if (entry.remap) applyRemap(doc, entry.remap, "before");
   // 移除因 undo 而清空的层（提取层）：仅在 on=redo 的层、undo 后已空时删除——由 entryApplyFx 处理
   doc.history.redo.push(entry);
   invalidateBitmaps(doc);
@@ -756,6 +925,8 @@ export function redo(): void {
     if (l) applyLayerOps(l, step.ops, "after");
   }
   if (entry.base) applyBasePatch(doc, entry.base, "after");
+  if (entry.palette) applyPalette(doc, entry.palette.after);
+  if (entry.remap) applyRemap(doc, entry.remap, "after");
   doc.history.undo.push(entry);
   invalidateBitmaps(doc);
   updateDoc(doc, {});

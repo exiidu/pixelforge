@@ -1,7 +1,7 @@
 /** 两级渲染：离屏 ImageData（网格分辨率）→ 最近邻拉伸到显示画布。
  *  M2.7：多图层栈自底向上合成单张位图；导航器已移除。 */
 
-import { layerFillAt, layerInkAt } from "./store";
+import { layerFillAt, layerInkAt, layerAlphaAt, docHasAlpha } from "./store";
 import type { EditorDoc } from "./store";
 
 export interface DocBitmap {
@@ -10,7 +10,8 @@ export interface DocBitmap {
 
 interface ComposeOpts {
   includeInk?: boolean;   // 默认 true（墨线并入文件层，可单独关闭供线稿分离）
-  transparent?: boolean;  // 边缘泛洪去底（导出用）
+  alphaAware?: boolean;   // 默认 true：按层 alpha 合成（上层透明露出下层）
+  transparent?: boolean;  // 导出需要透明背景（无源 alpha 时回退边缘泛洪）
 }
 
 /** 自顶向下取首个可见墨线索引（-1 = 无）。 */
@@ -24,19 +25,23 @@ function cellInkIndex(doc: EditorDoc, i: number): number {
   return ink;
 }
 
-/** 单格最终合成色（fill 自顶优先 + 墨线按不透明度叠加）——整幅与实时补丁共用同一套算法。 */
-function cellColor(doc: EditorDoc, i: number, includeInk: boolean): [number, number, number, number] {
+/** 单格最终合成色（fill 自顶优先 + 墨线按不透明度叠加）——整幅与实时补丁共用同一套算法。
+ *  alphaAware=true 时按层 alpha 剔除（上层透明露出下层）；false 时忽略 alpha（旧不透明行为）。 */
+function cellColor(
+  doc: EditorDoc, i: number, includeInk: boolean, alphaAware: boolean,
+): [number, number, number, number] {
   let r = 0, g = 0, b = 0, a = 0;
   for (let k = doc.layers.length - 1; k >= 0; k--) {
     const layer = doc.layers[k];
     if (!layer.visible) continue;
     const f = layerFillAt(doc, layer, i);
     if (f < 0) continue;
+    if (alphaAware && layerAlphaAt(doc, layer, i) <= 0) continue; // 上层透明 → 露出下层
     const c = doc.palette[f] ?? [255, 0, 255];
     r = c[0]; g = c[1]; b = c[2]; a = 255;
     break; // 顶层不透明，下层不再参与
   }
-  if (includeInk && doc.inkVisible && doc.inkOpacity > 0) {
+  if (includeInk && a === 255 && doc.inkVisible && doc.inkOpacity > 0) {
     const ink = cellInkIndex(doc, i);
     if (ink >= 0) {
       const c = doc.palette[ink] ?? [0, 0, 0];
@@ -56,9 +61,45 @@ export function patchBitmapCells(doc: EditorDoc, cells: Iterable<number>): void 
   const ctx = cache.canvas.getContext("2d")!;
   const px = ctx.createImageData(1, 1);
   for (const i of cells) {
-    const [r, g, b, a] = cellColor(doc, i, true);
+    const [r, g, b, a] = cellColor(doc, i, true, true);
     px.data[0] = r; px.data[1] = g; px.data[2] = b; px.data[3] = a;
     ctx.putImageData(px, i % doc.w, Math.floor(i / doc.w));
+  }
+}
+
+/** 边缘泛洪去底：背景色 = 边缘格中占比最高的有效色，从边缘连通同色区 alpha=0。
+ *  M5-0 起仅在无源 alpha 信息时作为回退（非透明素材行为不变）。 */
+function edgeFloodAlpha(data: Uint8ClampedArray, w: number, h: number): void {
+  const colorKey = (i: number): string =>
+    data[i * 4 + 3] === 0 ? "" : `${data[i * 4]},${data[i * 4 + 1]},${data[i * 4 + 2]}`;
+  const borderCount = new Map<string, number>();
+  const push = (x: number, y: number) => {
+    const key = colorKey(y * w + x);
+    if (key) borderCount.set(key, (borderCount.get(key) ?? 0) + 1);
+  };
+  for (let x = 0; x < w; x++) { push(x, 0); push(x, h - 1); }
+  for (let y = 1; y < h - 1; y++) { push(0, y); push(w - 1, y); }
+  let bgKey = "";
+  let best = 0;
+  for (const [key, n] of borderCount) if (n > best) { best = n; bgKey = key; }
+  if (!bgKey) return;
+  const visited = new Uint8Array(w * h);
+  const queue: number[] = [];
+  const seed = (x: number, y: number) => {
+    const i = y * w + x;
+    if (!visited[i] && colorKey(i) === bgKey) { visited[i] = 1; queue.push(i); }
+  };
+  for (let x = 0; x < w; x++) { seed(x, 0); seed(x, h - 1); }
+  for (let y = 1; y < h - 1; y++) { seed(0, y); seed(w - 1, y); }
+  while (queue.length) {
+    const i = queue.pop()!;
+    data[i * 4 + 3] = 0; // 轮廓外透明
+    const x = i % w, y = Math.floor(i / w);
+    for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + ox, ny = y + oy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      seed(nx, ny);
+    }
   }
 }
 
@@ -69,9 +110,11 @@ function renderImageData(
   const img = new ImageData(w, h);
   const data = img.data;
   const includeInk = opts.includeInk ?? true;
+  const transparent = !!opts.transparent;
+  const alphaAware = opts.alphaAware ?? true;
 
   for (let i = 0; i < w * h; i++) {
-    const [r, g, b, a] = cellColor(doc, i, includeInk);
+    const [r, g, b, a] = cellColor(doc, i, includeInk, alphaAware);
     const k = i * 4;
     data[k] = r;
     data[k + 1] = g;
@@ -79,51 +122,54 @@ function renderImageData(
     data[k + 3] = a;
   }
 
-  if (opts.transparent) {
-    // 背景色 = 边缘格中占比最高的有效色；从边缘泛洪，连通底色区 alpha=0（轮廓外透明）
-    const colorKey = (i: number): string =>
-      data[i * 4 + 3] === 0 ? "" : `${data[i * 4]},${data[i * 4 + 1]},${data[i * 4 + 2]}`;
-    const borderCount = new Map<string, number>();
-    const push = (x: number, y: number) => {
-      const key = colorKey(y * w + x);
-      if (key) borderCount.set(key, (borderCount.get(key) ?? 0) + 1);
-    };
-    for (let x = 0; x < w; x++) { push(x, 0); push(x, h - 1); }
-    for (let y = 1; y < h - 1; y++) { push(0, y); push(w - 1, y); }
-    let bgKey = "";
-    let best = 0;
-    for (const [key, n] of borderCount) if (n > best) { best = n; bgKey = key; }
-    if (bgKey) {
-      const visited = new Uint8Array(w * h);
-      const queue: number[] = [];
-      const seed = (x: number, y: number) => {
-        const i = y * w + x;
-        if (!visited[i] && colorKey(i) === bgKey) { visited[i] = 1; queue.push(i); }
-      };
-      for (let x = 0; x < w; x++) { seed(x, 0); seed(x, h - 1); }
-      for (let y = 1; y < h - 1; y++) { seed(0, y); seed(w - 1, y); }
-      while (queue.length) {
-        const i = queue.pop()!;
-        data[i * 4 + 3] = 0; // 轮廓外透明
-        const x = i % w, y = Math.floor(i / w);
-        for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-          const nx = x + ox, ny = y + oy;
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-          seed(nx, ny);
-        }
-      }
-    }
-  }
+  // 透明导出：有源 alpha/手动抠除 → 真 alpha（已在 data 中）；否则回退边缘泛洪
+  if (transparent && !docHasAlpha(doc)) edgeFloodAlpha(data, w, h);
   return img;
 }
 
-/** 文档合成画布（导出/线稿共用入口）。opts.transparent=true 时轮廓外透明。 */
+/** 文档合成画布（导出共用入口）。
+ *  transparent=true：有源 alpha 时输出真 alpha，否则边缘泛洪去底；
+ *  transparent=false：忽略 alpha，输出不透明（复现旧行为）。 */
 export function compositeDoc(doc: EditorDoc, opts: ComposeOpts = {}): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = doc.w;
   c.height = doc.h;
-  c.getContext("2d")!.putImageData(renderImageData(doc, doc.w, doc.h, opts), 0, 0);
+  const ctx = c.getContext("2d")!;
+  const transparent = !!opts.transparent;
+  ctx.putImageData(renderImageData(doc, doc.w, doc.h, {
+    includeInk: opts.includeInk ?? true,
+    // 透明导出按 alpha 合成（真 alpha 或边缘泛洪）；不透明导出忽略 alpha（复现旧行为）
+    alphaAware: transparent,
+    transparent,
+  }), 0, 0);
   return c;
+}
+
+/** 索引网格（M5-1 索引 PNG 导出）：每格 = 最上层不透明层的调色板索引；
+ *  alphaAware 时透明格记 -1（导出带 tRNS），墨线可见且有色则用墨线色索引。
+ *  与 cellColor 同一套层栈规则，但只输出索引、不做混色。 */
+export function composeIndexGrid(doc: EditorDoc, alphaAware: boolean): Int32Array {
+  const out = new Int32Array(doc.w * doc.h).fill(-1);
+  const inkOn = doc.inkVisible && doc.inkOpacity > 0;
+  for (let i = 0; i < out.length; i++) {
+    let idx = -1;
+    for (let k = doc.layers.length - 1; k >= 0; k--) {
+      const l = doc.layers[k];
+      if (!l.visible) continue;
+      const f = layerFillAt(doc, l, i);
+      if (f < 0) continue;
+      if (alphaAware && layerAlphaAt(doc, l, i) <= 0) continue;
+      idx = f;
+      break;
+    }
+    if (idx < 0) continue;
+    if (inkOn) {
+      const ink = cellInkIndex(doc, i);
+      if (ink >= 0) idx = ink;
+    }
+    out[i] = idx;
+  }
+  return out;
 }
 
 /** 线稿独立画布：仅墨线有色、其余透明（不受「线」叠加开关影响）；无墨线返回 null。 */
@@ -150,11 +196,17 @@ export function compositeLineart(doc: EditorDoc): HTMLCanvasElement | null {
   return c;
 }
 
-/** 取文档合成位图（按文档缓存；失效由 invalidateBitmaps/patchBitmapCells 显式管理）。 */
+/** 取文档合成位图（按文档缓存；失效由 invalidateBitmaps/patchBitmapCells 显式管理）。
+ *  编辑器显示按 alpha 合成（透明格露出棋盘格底），不做边缘泛洪。 */
 export function buildBitmaps(doc: EditorDoc): DocBitmap {
   const cache = (doc as EditorDoc & { _bitmaps?: DocBitmap })._bitmaps;
   if (cache && cache.canvas.width === doc.w && cache.canvas.height === doc.h) return cache;
-  const result = { canvas: compositeDoc(doc, { includeInk: true, transparent: false }) };
+  const c = document.createElement("canvas");
+  c.width = doc.w;
+  c.height = doc.h;
+  c.getContext("2d")!.putImageData(
+    renderImageData(doc, doc.w, doc.h, { includeInk: true, alphaAware: true }), 0, 0);
+  const result = { canvas: c };
   (doc as EditorDoc & { _bitmaps?: DocBitmap })._bitmaps = result;
   return result;
 }

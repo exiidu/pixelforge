@@ -13,6 +13,29 @@ from engine.recipe import Recipe
 from engine.types import RGBImage
 
 
+def _boost_bright_contrast(rgb: np.ndarray, c: float, start: float) -> np.ndarray:
+    """亮部 S 曲线对比增强（亮度自适应，**暗部与中间调完全不动**）。
+
+    在 [start, 1] 区间做以中点为轴的 S 曲线（t2 = t − c·(t − smoothstep(t))）：
+    两端固定（不裁切、不动最亮/最暗端），区间中点斜率 = 1 + c/2 —— c 越大，
+    亮区里的小幅差（天空/云的软梯度）被拉得越开，量化后才会分化成不同色块。
+    按比例缩放 RGB 以保持色相/饱和度。
+    """
+    c = max(0.0, min(0.95, float(c)))
+    start = max(0.0, min(0.95, float(start)))
+    if c <= 0.0 or start >= 1.0:
+        return rgb
+    arr = rgb.astype(np.float32)
+    lum = arr @ np.array([0.299, 0.587, 0.114], np.float32) / 255.0
+    t = np.clip((lum - start) / (1.0 - start), 0.0, 1.0)
+    ss = t * t * (3.0 - 2.0 * t)
+    t2 = t - c * (t - ss)
+    new_lum = start + t2 * (1.0 - start)
+    safe = np.maximum(lum, 1e-4)
+    scale = np.where(lum > 1e-4, new_lum / safe, 1.0)
+    return np.clip(arr * scale[..., None], 0, 255).astype(np.uint8)
+
+
 def run(image: RGBImage, recipe: Recipe, matting: MattingProvider) -> RGBImage:
     p = recipe.raw["preprocess"]
     out = image
@@ -33,6 +56,10 @@ def run(image: RGBImage, recipe: Recipe, matting: MattingProvider) -> RGBImage:
         arr = gray[..., None] + (arr - gray[..., None]) * sat
         arr = (arr - 128.0) * con + 128.0
         out = np.clip(arr, 0, 255).astype(np.uint8)
+
+    # M5.3：亮部对比增强（默认 0 = 关，行为与改动前逐位一致）
+    out = _boost_bright_contrast(out, float(levels.get("bright_contrast", 0.0)),
+                                 float(levels.get("bright_start", 0.6)))
 
     if p["matting"]["enable"]:
         out, _alpha = matting.remove_background(out)

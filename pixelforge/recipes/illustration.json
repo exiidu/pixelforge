@@ -2,7 +2,12 @@
   "target": { "width": 64, "height": 64 },
   "preprocess": {
     "bilateral": { "enable": false },
-    "levels": { "saturation": 1.0, "contrast": 1.0 },
+    "levels": {
+      "saturation": 1.0,
+      "contrast": 1.0,
+      "bright_contrast": 0.5,
+      "bright_start": 0.6
+    },
     "matting": { "enable": false }
   },
   "structure": {

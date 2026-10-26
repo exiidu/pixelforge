@@ -38,7 +38,7 @@
       <div class="pf-dlg-body">
         <h3>恢复上次会话</h3>
         <p class="pf-mute" id="restore-info">发现自动保存。</p>
-        <p class="pf-mute">恢复后配方、图层与手改原样保留；撤销历史不恢复。</p>
+        <p class="pf-mute">恢复后配方、图层与手改原样保留；上传的源图也会一并恢复（可直接重转换/出引擎线稿）。撤销历史不恢复。</p>
         <div class="pf-dlg-btns">
           <button type="button" class="pf-btn" id="restore-no">忽略并清空</button>
           <button type="button" class="pf-btn primary" id="restore-yes">恢复</button>
@@ -50,8 +50,8 @@
 
     <div class="pf-body">
       <aside class="pf-side" aria-label="工具面板">
-        <div class="pf-card">
-          <div class="pf-card-h">转换工具</div>
+        <details class="pf-card" id="convert-card" open>
+          <summary class="pf-card-h">转换工具</summary>
           <label class="pf-topfield">预设
             <select id="preset">
               <option value="photo" selected>照片</option>
@@ -72,6 +72,11 @@
           <label class="pf-param-row pf-allrow" title="打开后参数改动会广播到所有文档并各自重转换">
             <input type="checkbox" id="rp-all"> 应用到全部标签
           </label>
+          <div class="pf-toolrow">
+            <button class="pf-btn mini" id="rp-export" title="把当前文档的配方导出为 JSON（含预设名与全部参数）">导出配方</button>
+            <button class="pf-btn mini" id="rp-import" title="导入配方 JSON 并立即重转换当前文档">导入配方…</button>
+          </div>
+          <input id="rp-input" type="file" accept=".json,application/json" hidden />
           <details class="pf-params" id="params">
             <summary>转换参数 <span class="pf-val" id="rp-scope">仅当前文档</span></summary>
             <label class="pf-param">边缘权重 <output id="rp-edge-v">2.0</output>
@@ -82,6 +87,9 @@
             </label>
             <label class="pf-param">对比度 <output id="rp-contrast-v">1.00</output>
               <input type="range" id="rp-contrast" min="0" max="2" step="0.05" value="1">
+            </label>
+            <label class="pf-param" title="只增强亮部的对比（暗部与中间调不动）：天空/云的软梯度会分化出更多色块。0 = 关。">亮部对比 <output id="rp-bright-v">0.00</output>
+              <input type="range" id="rp-bright" min="0" max="0.95" step="0.05" value="0">
             </label>
             <label class="pf-param">软边比例 <output id="rp-soft-v">1.40</output>
               <input type="range" id="rp-soft" min="1" max="2.5" step="0.05" value="1.4">
@@ -101,6 +109,9 @@
             <label class="pf-param">色数 <output id="rp-maxcolors-v">64</output>
               <input type="range" id="rp-maxcolors" min="2" max="128" step="1" value="64">
             </label>
+            <label class="pf-param-row" title="重转换时强制保留当前调色板（最多 32 色）：提取色数相应扣减，锁定色追加到色板尾部。仅对「从源图提取」生效。">
+              <input type="checkbox" id="rp-lock"> 锁定色板
+            </label>
             <label class="pf-topfield">线稿
               <select id="rp-lineart">
                 <option value="off">关闭</option>
@@ -111,10 +122,10 @@
             <label class="pf-param-row"><input type="checkbox" id="rp-ink"> 引擎墨线</label>
             <p class="pf-mute">滑杆 300ms 防抖重转换；空白画布不参与转换。</p>
           </details>
-        </div>
+        </details>
 
-        <div class="pf-card" id="detail-card">
-          <div class="pf-card-h">细节增强</div>
+        <details class="pf-card" id="detail-card" open>
+          <summary class="pf-card-h">细节增强</summary>
           <p class="pf-mute" id="detail-note">用「细节」笔刷（D）标出要保细节的区域；重算只写回标记格，可撤销。</p>
           <label class="pf-topfield">强度
             <select id="detail-level">
@@ -127,7 +138,7 @@
             <button class="pf-btn" id="detail-clear">清除标记</button>
             <button class="pf-btn primary" id="detail-apply">重算细节区</button>
           </div>
-        </div>
+        </details>
 
         <div class="pf-card" id="tools-card">
           <div class="pf-card-h">编辑工具</div>
@@ -140,6 +151,7 @@
             <button class="pf-tile" id="tool-bucket"></button>
             <button class="pf-tile" id="tool-picker"></button>
             <button class="pf-tile" id="tool-detail"></button>
+            <button class="pf-tile" id="tool-alpha"></button>
             <button class="pf-tile" id="tool-line"></button>
             <button class="pf-tile" id="tool-rect"></button>
             <button class="pf-tile" id="tool-ellipse"></button>
@@ -161,7 +173,7 @@
             <button class="pf-tile seg" id="sym-v" title="上下镜像">V</button>
             <button class="pf-tile seg" id="sym-quad" title="四分镜像">四分</button>
           </div>
-          <p class="pf-mute">作用于「图层」面板选中的层；选区存在时绘制被限制在选区内，Esc 取消选区。快捷键：V 移动 · S 选区 · Q 套索 · B 铅笔 · E 橡皮 · G 油漆桶 · I 取色 · L 直线 · R 矩形 · O 椭圆 · M 对称。</p>
+          <p class="pf-mute">作用于「图层」面板选中的层；选区存在时绘制被限制在选区内，Esc 取消选区。快捷键：V 移动 · S 选区 · Q 套索 · B 铅笔 · E 橡皮 · G 油漆桶 · I 取色 · D 细节 · W 抠背景 · L 直线 · R 矩形 · O 椭圆 · M 对称。透明素材导入会自动在下方建「背景层」（默认隐藏），可显隐/删除还原背景。</p>
         </div>
 
         <div class="pf-h">操作提示</div>
@@ -197,6 +209,12 @@
           <option value="light">按明度（伽马）</option>
           <option value="sat">按饱和度</option>
         </select>
+        <div class="pf-toolrow">
+          <button class="pf-btn mini" id="pal-import" title="导入 .hex（每行一个 RRGGBB）或 .gpl（GIMP 色板）；整板替换，索引不动，可撤销">导入色板…</button>
+          <button class="pf-btn mini" id="pal-export-hex" title="导出当前文档色板为 .hex（每行 RRGGBB）">导出 .hex</button>
+          <button class="pf-btn mini" id="pal-export-gpl" title="导出当前文档色板为 .gpl（GIMP 色板）">导出 .gpl</button>
+        </div>
+        <input id="pal-input" type="file" accept=".hex,.gpl,.txt" hidden />
         <div class="pf-pal-sec">文档颜色 <span class="pf-val">左键选色 · 自定义色左键选用 / 右键删除</span></div>
         <div class="pf-pal" id="palette"></div>
         <div class="pf-pal-sec">自定义颜色</div>
@@ -267,6 +285,7 @@
           </div>
           <div class="pf-lib-btns">
             <button class="pf-btn" id="lib-add" title="把当前颜色加入自定义调色板">加入到调色板</button>
+            <button class="pf-btn" id="lib-replace" title="用当前颜色替换文档调色板的当前索引（索引与画布不动，可撤销）">替换当前色</button>
             <button class="pf-btn" id="lib-copy" title="拷贝当前颜色为十六进制">拷贝 Hex</button>
           </div>
         </details>
@@ -325,6 +344,7 @@
       <label class="pf-lib-sec pf-export-row">内容
         <select id="exp-content" class="pf-mini-select">
           <option value="composite" selected>像素画合成</option>
+          <option value="indexed">索引 PNG（PLTE 调色板 + 透明）</option>
           <option value="engine">线稿（引擎提取）</option>
           <option value="ink">像素墨线层</option>
         </select>
@@ -363,7 +383,7 @@
         <label class="pf-export-row" id="exp-sheet-row" title="同尺寸文档合并为水平条带（游戏精灵图）">
           <input type="checkbox" id="exp-sheet"> 精灵图集（同尺寸合并条带）
         </label>
-        <p class="pf-mute">勾选多个文档即可批量导出，每个文档一个文件；引擎线稿按源图原始分辨率导出，像素墨线层/合成按倍率最近邻放大。图集按尺寸分组，每组一个文件。</p>
+        <p class="pf-mute">勾选多个文档即可批量导出，每个文档一个文件；引擎线稿按源图原始分辨率导出，像素墨线层/合成按倍率最近邻放大。图集按尺寸分组，每组一个文件。「索引 PNG」输出 PLTE 调色板（透明格写 tRNS），保留色板结构，最多 256 色。</p>
         <div class="pf-spacer"></div>
         <div class="pf-export-btns">
           <button class="pf-btn" id="exp-cancel">取消</button>

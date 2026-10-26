@@ -1,19 +1,21 @@
 /** PixelForge 编辑器 M1 装配：打开→转换→渲染，多文档标签，缩放/网格/对比。M2.7 图层栈。 */
 
 import "./styles/main.css";
-import { convertFile, convertPath, extractLineartFile, extractLineartPath, health, rerunRegion,
+import { convertFile, convertPath, extractLineartFile, extractLineartPath, health, rerunRegion, exportIndexed,
   type ConvertResponse, type LineartResponse, type RerunRegionResponse } from "./api";
-import { compositeDoc, compositeLineart, renderView, invalidateBitmaps, patchBitmapCells } from "./render";
+import { compositeDoc, compositeLineart, renderView, invalidateBitmaps, patchBitmapCells, composeIndexGrid } from "./render";
 import {
-  activeDoc, addDoc, getState, setState, subscribe, hexOf, updateDoc, mkLayer, presetRecipe,
+  activeDoc, addDoc, getState, setState, subscribe, hexOf, updateDoc, mkLayer, presetRecipe, setActive,
   type RecipeParams, type EditorDoc, type PFLayer, type CellOverride, type PaletteSort,
   type LineartAsset,
 } from "./store";
 import { mountLayers, mountPalette, mountTabs, mountTools, mountHistory, mountColorLib } from "./panels";
+import { putSource, getSource, clearSources } from "./source-store";
 import { bucketFill, flipSelection, finishMove, copySelectionToOffset, paintCells, pixelPerfectLine, brushTipCells,
   shapeCells, shapePreviewApply, shapePreviewEnd, magneticSnap, polygonCells,
   beginStroke, endStroke, stampCells, redo, undo, compositeFill, ensureDocColor,
-  extractSelectionToLayer, deleteLayer, scopeHas, commitBasePatch } from "./tools";
+  extractSelectionToLayer, deleteLayer, scopeHas, commitBasePatch, magicAlphaErase,
+  setPaletteColor, setPaletteBaseWithRemap } from "./tools";
 import { rgbToHex, transformPalette, ZERO_PALETTE_FX, type PaletteFx } from "./color";
 
 /** 两格间的 Bresenham 线（磁力套索路径插值）。 */
@@ -86,15 +88,95 @@ function fitZoomForLineart(w: number, h: number): number {
   return Math.max(0.05, Math.min(1, cw / w, ch / h));
 }
 
-function docFromResponse(
+/* ------------------------------------------------ M5-0 真透明与主体分离 */
+
+/** 网格 alpha 灰度 PNG → 0/1 位图（长度 w*h）。 */
+function decodeAlphaPng(pngB64: string, w: number, h: number): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const cv = document.createElement("canvas");
+      cv.width = w;
+      cv.height = h;
+      const ctx = cv.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, w, h);
+      const px = ctx.getImageData(0, 0, w, h).data;
+      const out = new Uint8Array(w * h);
+      for (let i = 0; i < out.length; i++) out[i] = px[i * 4] >= 128 ? 1 : 0;
+      resolve(out);
+    };
+    img.onerror = () => reject(new Error("alpha 蒙版解码失败"));
+    img.src = `data:image/png;base64,${pngB64}`;
+  });
+}
+
+function alphaHasTransparent(a: Uint8Array): boolean {
+  for (let i = 0; i < a.length; i++) if (!a[i]) return true;
+  return false;
+}
+
+/** 边缘主色（不透明边缘格中出现最多的调色板索引）；边缘全透明时退化为全局主色。 */
+function edgeDominantIndex(fill: Int32Array, alpha: Uint8Array, w: number, h: number): number {
+  const tally = new Map<number, number>();
+  const add = (i: number) => { if (alpha[i]) tally.set(fill[i], (tally.get(fill[i]) ?? 0) + 1); };
+  for (let x = 0; x < w; x++) { add(x); add((h - 1) * w + x); }
+  for (let y = 1; y < h - 1; y++) { add(y * w); add(y * w + w - 1); }
+  let idx = -1, best = -1;
+  for (const [k, n] of tally) if (n > best) { best = n; idx = k; }
+  if (idx < 0) {
+    const t2 = new Map<number, number>();
+    for (let i = 0; i < alpha.length; i++) if (alpha[i]) t2.set(fill[i], (t2.get(fill[i]) ?? 0) + 1);
+    for (const [k, n] of t2) if (n > best) { best = n; idx = k; }
+  }
+  return Math.max(0, idx);
+}
+
+/** 自动拆分：透明格补「边缘主色」建背景层（默认隐藏=真透明，可恢复/删除）。 */
+function makeBackgroundLayer(fill: Int32Array, alpha: Uint8Array, w: number, h: number): PFLayer | null {
+  if (!alphaHasTransparent(alpha)) return null;
+  const idx = edgeDominantIndex(fill, alpha, w, h);
+  const bg = mkLayer("背景层", "normal");
+  bg.bg = true;
+  bg.visible = false;
+  for (let i = 0; i < alpha.length; i++) if (!alpha[i]) bg.data.set(i, { fill: idx });
+  return bg;
+}
+
+/** 组装内容层栈：画布层（底）→ [背景层] → 文件层（base，顶）。 */
+function buildLayers(fill: Int32Array, alpha: Uint8Array | null, w: number, h: number):
+  { layers: PFLayer[]; fileLayer: PFLayer } {
+  const fileLayer = mkLayer("文件层", "file");
+  const layers: PFLayer[] = [mkLayer("画布层", "canvas")];
+  const bg = alpha ? makeBackgroundLayer(fill, alpha, w, h) : null;
+  if (bg) layers.push(bg);
+  layers.push(fileLayer);
+  return { layers, fileLayer };
+}
+
+/** 重转换后刷新自动背景层（透明格补边缘主色）；源已无透明信息则移除该层。 */
+function refreshBackgroundLayer(doc: EditorDoc): void {
+  const bg = doc.layers.find((l) => l.bg);
+  if (!bg) return;
+  if (!doc.alpha || !alphaHasTransparent(doc.alpha)) {
+    doc.layers = doc.layers.filter((l) => l !== bg);
+    if (doc.activeLayerId === bg.id) doc.activeLayerId = doc.baseLayerId;
+    return;
+  }
+  const idx = edgeDominantIndex(doc.fill, doc.alpha, doc.w, doc.h);
+  bg.data.clear();
+  for (let i = 0; i < doc.alpha.length; i++) if (!doc.alpha[i]) bg.data.set(i, { fill: idx });
+}
+
+async function docFromResponse(
   name: string,
   r: ConvertResponse,
   src?: { file?: File; path?: string },
   recipe: RecipeParams = presetRecipe(getState().preset),
   presetName: string = getState().preset,
-) {
-  const fileLayer = mkLayer("文件层", "file");
-  const canvasLayer = mkLayer("画布层", "canvas");
+): Promise<EditorDoc> {
+  const alpha = r.alpha_png ? await decodeAlphaPng(r.alpha_png, r.width, r.height) : null;
+  const fill = Int32Array.from(r.fill.flat());
+  const { layers, fileLayer } = buildLayers(fill, alpha, r.width, r.height);
   const doc = addDoc({
     name,
     jobId: r.job_id,
@@ -105,11 +187,12 @@ function docFromResponse(
     paletteFx: { ...ZERO_PALETTE_FX },
     recipe: { ...recipe },
     presetName,
-    fill: Int32Array.from(r.fill.flat()),
+    fill,
     ink: r.ink ? Int32Array.from(r.ink.flat()) : null,
+    alpha,
     inkVisible: true,
     inkOpacity: 1,
-    layers: [canvasLayer, fileLayer], // 画布层在最底，文件层（结构转换结果）在上
+    layers, // 画布层在最底，[背景层]，文件层（结构转换结果）在上
     activeLayerId: fileLayer.id,
     baseLayerId: fileLayer.id,
     sourceUrl: r.source_png ? `data:image/png;base64,${r.source_png}` : "",
@@ -144,6 +227,7 @@ function docFromLineartResponse(
     presetName,
     fill: new Int32Array(0),
     ink: null,
+    alpha: null,
     inkVisible: false,
     inkOpacity: 1,
     layers: [],
@@ -167,6 +251,13 @@ function cacheSource(key: string, png: string | null): void {
 }
 
 /* ---------------------------------------------------------------- 批量导入（M3） */
+
+/** 把上传源文件落到 IndexedDB 并把 key 记到 doc.src（会话恢复后仍可重转换）。 */
+async function persistSource(doc: EditorDoc, file: File): Promise<void> {
+  const key = await putSource(file);
+  if (key && doc.src) doc.src.key = key;
+}
+
 /** 导入统一应用「当前配方」：有活动文档时取它的配方，否则取预设默认。 */
 function importCtx(): { presetName: string; recipe: RecipeParams } {
   const doc = activeDoc();
@@ -216,11 +307,13 @@ async function importFiles(all: File[], label: string): Promise<void> {
         if (lineartMode) {
           const t = performance.now();
           const r = await extractLineartFile(f, extractMode);
-          docFromLineartResponse(name, r, { file: f }, ctx.recipe, ctx.presetName,
+          const d = docFromLineartResponse(name, r, { file: f }, ctx.recipe, ctx.presetName,
             Math.round(performance.now() - t));
+          await persistSource(d, f);
         } else {
           const r = await convertFile(f, ctx.presetName, getState().size, recipeOverrides(ctx.recipe));
-          docFromResponse(name, r, { file: f }, ctx.recipe, ctx.presetName);
+          const d = await docFromResponse(name, r, { file: f }, ctx.recipe, ctx.presetName);
+          await persistSource(d, f);
         }
         ok++;
       } catch (err) {
@@ -244,6 +337,7 @@ let converting = false;
 /** 配方参数 → 引擎 overrides（与预设在引擎侧深合并）。 */
 function recipeOverrides(r: import("./store").RecipeParams): Record<string, unknown> {
   return {
+    preprocess: { levels: { bright_contrast: r.brightContrast } }, // M5.3 亮部对比（自适应，只动亮区）
     sampling: {
       weights: { edge: r.edge, dark: r.dark, contrast: r.contrast },
       soft_ratio: r.softRatio,
@@ -252,7 +346,11 @@ function recipeOverrides(r: import("./store").RecipeParams): Record<string, unkn
     quantize: {
       palette: r.paletteSource === "builtin"
         ? { source: "builtin", ref: r.paletteRef }
-        : { source: "extract", max_colors: r.maxColors },
+        : {
+            source: "extract", max_colors: r.maxColors,
+            // M5-4 色板锁定：重转换时强制保留的锁定色（引擎侧从提取预算扣减并追加到尾部）
+            seed_colors: r.paletteLock ? r.seedColors : [],
+          },
     },
     structure: { lineart: { mode: r.lineart } },
     ink: { enable: r.ink },
@@ -343,6 +441,13 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
   if (!progd.open) progd.showModal();
   try {
     const { size } = getState();
+    // M5-4：锁定开启时按当前色板刷新锁定色（语义 = "保留现在这套色"）
+    if (doc.recipe.paletteLock && doc.paletteBase.length && doc.recipe.paletteSource === "extract") {
+      doc.recipe = {
+        ...doc.recipe,
+        seedColors: doc.paletteBase.slice(0, 32).map((c) => [...c] as [number, number, number]),
+      };
+    }
     const ov = recipeOverrides(doc.recipe);
     const r = doc.src.file
       ? await convertFile(doc.src.file, doc.presetName, size, ov)
@@ -350,13 +455,14 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
     const fromLineart = !!doc.lineart;
     const dimsChanged = r.width !== doc.w || r.height !== doc.h;
     const oldW = doc.w, oldH = doc.h;
+    const alpha = r.alpha_png ? await decodeAlphaPng(r.alpha_png, r.width, r.height) : null;
+    const newFill = Int32Array.from(r.fill.flat());
     invalidateBitmaps(doc); // 先失效缓存：updateDoc 触发的重绘按新数据重建
 
     if (fromLineart) {
       // 线稿 → 像素画：重建网格图层栈与历史（线稿没有手改可重放）
       dropLineartImage(doc.id);
-      const canvasLayer = mkLayer("画布层", "canvas");
-      const fileLayer = mkLayer("文件层", "file");
+      const { layers, fileLayer } = buildLayers(newFill, alpha, r.width, r.height);
       updateDoc(doc, {
         lineart: undefined,
         name: doc.name,
@@ -365,11 +471,12 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
         h: r.height,
         palette: transformPalette(r.palette, doc.paletteFx),
         paletteBase: r.palette,
-        fill: Int32Array.from(r.fill.flat()),
+        fill: newFill,
         ink: r.ink ? Int32Array.from(r.ink.flat()) : null,
+        alpha,
         inkVisible: true,
         inkOpacity: 1,
-        layers: [canvasLayer, fileLayer],
+        layers,
         activeLayerId: fileLayer.id,
         baseLayerId: fileLayer.id,
         sourceUrl: r.source_png ? `data:image/png;base64,${r.source_png}` : "",
@@ -389,8 +496,9 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
         h: r.height,
         palette: transformPalette(r.palette, doc.paletteFx),
         paletteBase: r.palette,
-        fill: Int32Array.from(r.fill.flat()),
+        fill: newFill,
         ink: r.ink ? Int32Array.from(r.ink.flat()) : null,
+        alpha,
         sourceUrl: r.source_png ? `data:image/png;base64,${r.source_png}` : "",
         colorsUsed: r.meta.colors_used,
         ms: r.meta.grid_ms,
@@ -404,6 +512,7 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
       }
       if (dimsChanged) setState({ zoom: fitZoomFor(r.width, r.height) });
     }
+    refreshBackgroundLayer(doc); // 自动背景层随新 alpha/fill/色板刷新
     invalidateBitmaps(doc);
     cacheSource(r.job_id, r.source_png);
     redrawCanvas(); // 重放/重绑改动了手改层，收尾再绘一次保证显示与新数据一致
@@ -654,6 +763,21 @@ document.addEventListener("pf:custom-color", ((e: CustomEvent<{ rgb: [number, nu
   const doc = activeDoc();
   if (doc) setState({ colorIndex: ensureDocColor(doc, rgb) });
 }) as EventListener);
+/* M5-3：用颜色库当前色替换文档调色板的当前索引（索引/画布不动，可撤销） */
+document.addEventListener("pf:replace-color", ((e: CustomEvent<{ rgb: [number, number, number] }>) => {
+  const doc = activeDoc();
+  if (!doc) return;
+  const k = getState().colorIndex;
+  if (k < 0 || k >= doc.paletteBase.length) { setStatus("请先选一个文档颜色"); return; }
+  const hex = rgbToHex(e.detail.rgb);
+  if (setPaletteColor(doc, k, e.detail.rgb, "替换颜色")) {
+    invalidateBitmaps(doc);
+    redrawCanvas();
+    setStatus(`已把索引 ${k} 替换为 ${hex}（可撤销）`);
+  } else {
+    setStatus(`索引 ${k} 已是 ${hex}`);
+  }
+}) as EventListener);
 
 /* ------------------------------------------------ M2 绘制交互（指针） */
 let painting = false;   // 铅笔/橡皮拖拽
@@ -740,6 +864,20 @@ canvas.addEventListener("pointerdown", (e) => {
     paintDetailMask(doc, [cell], e.altKey);
     return;
   }
+  if (tool === "alpha") {
+    if (e.shiftKey) {
+      // 按色抠除：单击泛洪同色连通域（受选区限制）
+      const n = magicAlphaErase(doc, cell[0], cell[1]);
+      setStatus(n ? `按色抠除 ${n} 格` : "该处没有可抠除的同色区");
+      return;
+    }
+    // 手动抠：拖拽刷透明（Alt = 恢复）
+    painting = true;
+    beginStroke(doc);
+    drawStroke(cell, cell, e.altKey);
+    lastCell = cell;
+    return;
+  }
   // 铅笔/橡皮：一笔一条历史
   painting = true;
   beginStroke(doc);
@@ -769,12 +907,15 @@ function paintDetailMask(doc: EditorDoc, pts: Array<[number, number]>, erase: bo
   }
 }
 
-function drawStroke(from: [number, number], to: [number, number]): void {
+function drawStroke(from: [number, number], to: [number, number], erase = false): void {
   const doc = activeDoc();
   if (!doc) return;
   const cells = pixelPerfectLine(from[0], from[1], to[0], to[1])
     .flatMap(([x, y]) => brushTipCells(x, y, getState().brushSize));
-  const changed = stampCells(doc, cells, "fill", toolValue());
+  // 抠背景工具写 alpha 槽（0=透明；Alt 恢复）；铅笔/橡皮写 fill 槽
+  const slot = getState().tool === "alpha" ? "alpha" : "fill";
+  const value = slot === "alpha" ? (erase ? "erase" : 0) : toolValue();
+  const changed = stampCells(doc, cells, slot, value);
   if (!changed.length) return;
   // 实时笔迹：只把变更格补丁进合成位图再重绘（不必整幅重建，提交时才全量刷新）
   patchBitmapCells(doc, changed);
@@ -787,7 +928,7 @@ canvas.addEventListener("pointermove", (e) => {
   if (painting) {
     const cell = cellFromEvent(e);
     if (cell && lastCell && (cell[0] !== lastCell[0] || cell[1] !== lastCell[1])) {
-      drawStroke(lastCell, cell);
+      drawStroke(lastCell, cell, e.altKey);
       lastCell = cell;
     }
   } else if (dragging && dragStart) {
@@ -846,7 +987,8 @@ canvas.addEventListener("pointermove", (e) => {
 const endPointer = (e: PointerEvent) => {
   const doc = activeDoc();
   if (painting && doc) {
-    endStroke(doc, getState().tool === "eraser" ? "橡皮" : "铅笔");
+    const t = getState().tool;
+    endStroke(doc, t === "alpha" ? "抠背景" : t === "eraser" ? "橡皮" : "铅笔");
   }
   if (dragging && dragStart && doc) {
     const cell = cellFromEvent(e);
@@ -943,6 +1085,7 @@ document.addEventListener("keydown", (e) => {
   const toolKeys: Record<string, string> = {
     b: "pencil", e: "eraser", g: "bucket", i: "picker", s: "select",
     v: "move", q: "lasso", l: "line", r: "rect", o: "ellipse", h: "hand", d: "detail",
+    w: "alpha",
   };
   if (!selection && toolKeys[k]) { setState({ tool: toolKeys[k] as never }); return; }
   if (k === "m") { // 对称循环：关→H→V→四分
@@ -979,11 +1122,11 @@ const expdlg = $("exportdlg") as HTMLDialogElement;
 let expPreviewId: string | null = null;
 let expZoom = 4;
 
-/** 导出内容：像素画合成 / 引擎线稿（源图提取）/ 像素墨线层。 */
-type ExpContent = "composite" | "engine" | "ink";
+/** 导出内容：像素画合成 / 索引 PNG（PLTE）/ 引擎线稿 / 像素墨线层。 */
+type ExpContent = "composite" | "indexed" | "engine" | "ink";
 function expContent(): ExpContent {
   const v = ($("exp-content") as HTMLSelectElement)?.value;
-  return v === "engine" || v === "ink" ? v : "composite";
+  return v === "indexed" || v === "engine" || v === "ink" ? v : "composite";
 }
 
 /** 引擎线稿缓存（key = doc.id:jobId）与在途请求，避免重复提取。 */
@@ -1056,29 +1199,28 @@ function expNameWithSuffix(doc: import("./store").EditorDoc, autoSuffix: string)
     .replace("{preset}", doc.presetName);
 }
 
-/** 线稿模式固定 PNG；引擎线稿按源图原始分辨率，尺寸选项灰显；图集仅网格内容可用。 */
+/** 线稿模式固定 PNG；引擎线稿按源图原始分辨率，尺寸选项灰显；索引 PNG 不支持图集。 */
 function expApplyContentUI(): void {
   const c = expContent();
   const fmt = $("exp-format") as HTMLSelectElement;
   const trans = $("exp-trans") as HTMLInputElement;
   const previewDoc = getState().docs.find((d) => d.id === expPreviewId);
   const lineartDoc = !!previewDoc?.lineart; // 线稿文档固定源分辨率 PNG
-  const lockFormat = c !== "composite" || lineartDoc;
+  const lockFormat = c === "engine" || c === "ink" || c === "indexed" || lineartDoc;
   fmt.disabled = lockFormat;
-  trans.disabled = lockFormat;
-  if (lockFormat) {
-    fmt.value = "png";
-    trans.checked = false;
-  }
-  $("exp-trans-row").classList.toggle("off", lockFormat || fmt.value === "jpeg");
+  trans.disabled = c === "engine" || c === "ink" || lineartDoc;
+  if (lockFormat) fmt.value = "png";
+  if (trans.disabled) trans.checked = false;
+  $("exp-trans-row").classList.toggle("off", trans.disabled || fmt.value === "jpeg");
   const rawRes = c === "engine" || lineartDoc;
   ($("exp-scale") as HTMLSelectElement).disabled = rawRes;
   ($("exp-w") as HTMLInputElement).disabled = rawRes;
   ($("exp-h") as HTMLInputElement).disabled = rawRes;
+  const noSheet = rawRes || c === "indexed"; // 索引 PNG 不合并图集
   const sheet = $("exp-sheet") as HTMLInputElement;
-  sheet.disabled = rawRes;
-  if (rawRes) sheet.checked = false;
-  $("exp-sheet-row").classList.toggle("off", rawRes);
+  sheet.disabled = noSheet;
+  if (noSheet) sheet.checked = false;
+  $("exp-sheet-row").classList.toggle("off", noSheet);
 }
 
 function expCheckedIds(): string[] {
@@ -1177,7 +1319,8 @@ function expRenderPreview(): void {
   cv.style.imageRendering = ""; // 恢复 CSS 的像素化预览
   cv.style.width = `${Math.max(1, Math.round(doc.w * expZoom))}px`;
   cv.style.height = `${Math.max(1, Math.round(doc.h * expZoom))}px`;
-  pname.textContent = doc.name + (content === "ink" ? " · 像素墨线层" : "");
+  pname.textContent = doc.name
+    + (content === "ink" ? " · 像素墨线层" : content === "indexed" ? " · 索引 PNG（PLTE）" : "");
   $("exp-zoomv").textContent = `${Math.round(expZoom * 100)}%`;
 }
 
@@ -1291,6 +1434,41 @@ $("exp-ok").addEventListener("click", async () => {
   const ids = expCheckedIds();
   if (!ids.length) { setStatus("尚未勾选任何文档"); return; }
   const content = expContent();
+
+  // 索引 PNG：把最终索引网格交给引擎写 PLTE(+tRNS)（保留调色板结构，游戏引擎友好）
+  if (content === "indexed") {
+    const scale = Number(($("exp-scale") as HTMLSelectElement).value) || 1;
+    const withAlpha = expTransparent(); // 勾选=透明格写 tRNS；不勾=忽略透明（全部有色）
+    let n = 0, skipped = 0;
+    const failed: string[] = [];
+    for (const id of ids) {
+      const doc = getState().docs.find((d) => d.id === id);
+      if (!doc || doc.lineart) { skipped++; continue; }
+      try {
+        const grid = composeIndexGrid(doc, withAlpha);
+        const outW = Math.round(doc.w * scale), outH = Math.round(doc.h * scale);
+        const rows: number[][] = [];
+        for (let y = 0; y < doc.h; y++) rows.push(Array.from(grid.subarray(y * doc.w, (y + 1) * doc.w)));
+        const r = await exportIndexed(doc.palette, rows, outW, outH);
+        const a = document.createElement("a");
+        a.download = `${expNameWithSuffix(doc, `_${outW}px_indexed`)}.png`;
+        a.href = `data:image/png;base64,${r.png}`;
+        a.click();
+        n++;
+        setStatus(`索引 PNG：${r.width}×${r.height} · ${r.colors} 色${r.transparent ? " · 含透明" : ""}`);
+        if (ids.length > 1) await new Promise((res) => setTimeout(res, 250));
+      } catch (err) {
+        failed.push(`${doc.name}（${(err as Error).message}）`);
+      }
+    }
+    expdlg.close();
+    if (failed.length) {
+      setStatus(`索引 PNG 失败：${failed.slice(0, 2).join("；")}${failed.length > 2 ? "…" : ""}`);
+      return;
+    }
+    setStatus(`已导出 ${n} 个索引 PNG${skipped ? ` · 跳过 ${skipped} 个线稿文档` : ""}`);
+    return;
+  }
 
   // 引擎线稿：按源图原始分辨率导出（不做缩放）
   if (content === "engine") {
@@ -1421,6 +1599,7 @@ const rpRanges: Array<[string, keyof RecipeParams, (v: number) => string]> = [
   ["rp-edge", "edge", (v) => v.toFixed(1)],
   ["rp-dark", "dark", (v) => v.toFixed(1)],
   ["rp-contrast", "contrast", (v) => v.toFixed(2)],
+  ["rp-bright", "brightContrast", (v) => v.toFixed(2)],
   ["rp-soft", "softRatio", (v) => v.toFixed(2)],
   ["rp-merge", "mergeDelta", (v) => v.toFixed(2)],
   ["rp-maxcolors", "maxColors", (v) => String(Math.round(v))],
@@ -1450,8 +1629,9 @@ function syncRecipeUI(): void {
     lastSyncedDocId = useDoc.id;
     if (getState().preset !== useDoc.presetName) setState({ preset: useDoc.presetName });
     const sizeSel = $("size") as HTMLSelectElement;
-    if (useDoc.w !== getState().size && [...sizeSel.options].some((o) => Number(o.value) === useDoc.w)) {
-      setState({ size: useDoc.w });
+    const docLong = Math.max(useDoc.w, useDoc.h); // 尺寸=长边（非正方形素材）
+    if (docLong !== getState().size && [...sizeSel.options].some((o) => Number(o.value) === docLong)) {
+      setState({ size: docLong });
     }
   }
   ($("preset") as HTMLSelectElement).value = useDoc?.presetName ?? getState().preset;
@@ -1466,6 +1646,7 @@ function syncRecipeUI(): void {
     r.paletteSource === "extract" ? "extract" : `builtin:${r.paletteRef}`;
   ($("rp-lineart") as HTMLSelectElement).value = r.lineart;
   ($("rp-ink") as HTMLInputElement).checked = r.ink;
+  ($("rp-lock") as HTMLInputElement).checked = r.paletteLock;
   ($("rp-all") as HTMLInputElement).checked = getState().applyAll;
   $("rp-scope").textContent = getState().applyAll ? "全部标签" : "仅当前文档";
 
@@ -1475,9 +1656,11 @@ function syncRecipeUI(): void {
   ($("rp-lineart") as HTMLSelectElement).disabled = off;
   ($("rp-ink") as HTMLInputElement).disabled = off;
   ($("rp-maxcolors") as HTMLInputElement).disabled = off || r.paletteSource !== "extract";
+  ($("rp-lock") as HTMLInputElement).disabled = off || r.paletteSource !== "extract";
 }
 
 /** 线稿文档/线稿预设的界面模式：隐藏像素尺寸、参数、编辑工具与像素面板。 */
+let lastModeDocId: string | null = null; // 折叠状态只在「切换文档」时重置，避免每次 setState 覆盖用户手动展开
 function syncDocModeUI(): void {
   const doc = activeDoc();
   const lineartDoc = !!doc?.lineart;
@@ -1490,6 +1673,14 @@ function syncDocModeUI(): void {
   $("grid").hidden = lineartDoc;
   $("underlay-wrap").hidden = lineartDoc;
   $("detail-card").hidden = lineartDoc;
+  // 空白画布不参与转换：默认折叠「转换工具」与「细节增强」（用户仍可手动展开/折叠）
+  const docId = doc?.id ?? null;
+  if (docId !== lastModeDocId) {
+    lastModeDocId = docId;
+    const blank = !!doc?.blank;
+    ($("convert-card") as HTMLDetailsElement).open = !blank;
+    ($("detail-card") as HTMLDetailsElement).open = !blank;
+  }
   ($("detail-level") as HTMLSelectElement).value = String(getState().detailLevel);
   syncDetailButtons();
   $("mode-note").textContent = lineartPreset || lineartDoc
@@ -1538,10 +1729,108 @@ $("rp-ink").addEventListener("change", (e) => {
   patchRecipe({ ink: (e.target as HTMLInputElement).checked });
   void applyRecipeChange();
 });
+/* M5-4 锁定色板：开启时以当前色板为锁定色，重转换强制保留（≤32 色） */
+$("rp-lock").addEventListener("change", (e) => {
+  const on = (e.target as HTMLInputElement).checked;
+  const doc = activeDoc();
+  const seedColors = on && doc
+    ? doc.paletteBase.slice(0, 32).map((c) => [...c] as [number, number, number])
+    : [];
+  patchRecipe({ paletteLock: on, seedColors });
+  void applyRecipeChange();
+});
 $("rp-all").addEventListener("change", (e) => {
   const v = (e.target as HTMLInputElement).checked;
   setState({ applyAll: v });
   setStatus(v ? "参数改动将应用到全部标签" : "参数改动仅作用于当前文档");
+});
+
+/* ------------------------------------------------ 配方 JSON 导出/导入（M5-5） */
+interface RecipeFileV1 {
+  type: "pixelforge.recipe";
+  version: 1;
+  preset: string;
+  recipe: RecipeParams;
+  size?: number;
+}
+
+/** 只接受已知字段，避免坏文件把文档配方污染成非法状态。 */
+function sanitizeRecipe(raw: unknown): RecipeParams | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const base = presetRecipe("photo");
+  const num = (k: keyof RecipeParams, lo: number, hi: number) => {
+    const v = o[k as string];
+    return typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : (base[k] as number);
+  };
+  const seeds = Array.isArray(o.seedColors)
+    ? (o.seedColors as unknown[])
+        .filter((c): c is number[] => Array.isArray(c) && c.length === 3)
+        .slice(0, 32)
+        .map((c) => [clampByte(c[0]), clampByte(c[1]), clampByte(c[2])] as [number, number, number])
+    : [];
+  const palSrc = o.paletteSource === "builtin" ? "builtin" : "extract";
+  const lineart = o.lineart === "xdog" || o.lineart === "onnx" ? o.lineart : "off";
+  return {
+    edge: num("edge", 0, 4),
+    dark: num("dark", 0, 4),
+    contrast: num("contrast", 0, 2),
+    brightContrast: num("brightContrast", 0, 0.95),
+    softRatio: num("softRatio", 1, 2.5),
+    mergeDelta: num("mergeDelta", 0, 0.2),
+    paletteSource: palSrc,
+    paletteRef: typeof o.paletteRef === "string" ? o.paletteRef : base.paletteRef,
+    maxColors: Math.round(num("maxColors", 2, 128)),
+    paletteLock: o.paletteLock === true,
+    seedColors: seeds,
+    ink: o.ink === true,
+    lineart,
+  };
+}
+
+$("rp-export").addEventListener("click", () => {
+  const doc = activeDoc();
+  if (!doc) { setStatus("没有打开的文档"); return; }
+  const payload: RecipeFileV1 = {
+    type: "pixelforge.recipe", version: 1,
+    preset: doc.presetName,
+    recipe: { ...doc.recipe, seedColors: doc.recipe.seedColors.map((c) => [...c] as [number, number, number]) },
+    size: doc.w,
+  };
+  const safe = doc.name.replace(/[\\/:*?"<>|]/g, "_");
+  downloadText(`${safe}.recipe.json`, JSON.stringify(payload, null, 2) + "\n");
+  setStatus(`已导出配方 → ${safe}.recipe.json`);
+});
+$("rp-import").addEventListener("click", () => ($("rp-input") as HTMLInputElement).click());
+$("rp-input").addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  const doc = activeDoc();
+  if (!file || !doc) return;
+  if (doc.blank) { setStatus("空白画布不参与转换，无法套用配方"); return; }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    setStatus("配方文件不是合法 JSON");
+    return;
+  }
+  const obj = (parsed ?? {}) as Partial<RecipeFileV1> & { recipe?: unknown };
+  const recipe = sanitizeRecipe(obj.recipe ?? parsed);
+  if (!recipe) { setStatus("配方文件缺少 recipe 字段"); return; }
+  const preset = typeof obj.preset === "string" && ["photo", "illustration", "lineart"].includes(obj.preset)
+    ? obj.preset : doc.presetName;
+  updateDoc(doc, { recipe, presetName: preset });
+  if (typeof obj.size === "number" && [16, 24, 32, 48, 64, 96, 128, 192, 256, 512].includes(obj.size)) {
+    ($("size") as HTMLSelectElement).value = String(obj.size);
+    setState({ size: obj.size });
+  }
+  setState({ preset });
+  syncRecipeUI();
+  setStatus(`已导入配方（${preset}），正在重转换…`);
+  await applyRecipeChange(preset);
+  setStatus(`配方已导入并重转换 ${doc.name}`);
 });
 $("detail-level").addEventListener("change", (e) => {
   setState({ detailLevel: Number((e.target as HTMLSelectElement).value) });
@@ -1600,6 +1889,80 @@ $("pfx-sat").addEventListener("input", (e) => {
 $("pfx-reset").addEventListener("click", () => applyPaletteFx({ ...ZERO_PALETTE_FX }));
 subscribe(syncPaletteFxUI);
 syncPaletteFxUI();
+
+/* ------------------------------------------------ 色板导入导出（M5-3，.hex / .gpl） */
+const clampByte = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+
+/** 解析 .hex（每行 RRGGBB / #RRGGBB）与 .gpl（GIMP：R G B [name]）色板文本。 */
+function parsePaletteText(text: string): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (/^GIMP Palette/i.test(line) || /^(Name|Columns)\s*:/i.test(line)) continue;
+    const hex = line.replace(/^#/, "");
+    if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+      out.push([
+        parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16),
+      ]);
+    } else {
+      const m = line.match(/^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})(?:\s|$)/);
+      if (m) out.push([clampByte(+m[1]), clampByte(+m[2]), clampByte(+m[3])]);
+    }
+    if (out.length >= 256) break; // PNG 索引上限
+  }
+  return out;
+}
+
+const hexPair = (v: number) => v.toString(16).padStart(2, "0").toUpperCase();
+
+function paletteToHex(colors: [number, number, number][]): string {
+  return colors.map((c) => c.map(hexPair).join("")).join("\n") + "\n";
+}
+
+function paletteToGpl(colors: [number, number, number][], name: string): string {
+  const lines = ["GIMP Palette", `Name: ${name}`, "Columns: 16", "#"];
+  for (const c of colors) {
+    const rgb = c.map((v) => String(v).padStart(3)).join(" ");
+    lines.push(`${rgb}\t#${c.map(hexPair).join("")}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+function downloadText(filename: string, text: string): void {
+  const a = document.createElement("a");
+  a.download = filename;
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+$("pal-import").addEventListener("click", () => ($("pal-input") as HTMLInputElement).click());
+$("pal-input").addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  const doc = activeDoc();
+  if (!file || !doc) return;
+  const colors = parsePaletteText(await file.text());
+  if (!colors.length) { setStatus("色板文件无法解析（支持 .hex / .gpl）"); return; }
+  const changed = setPaletteBaseWithRemap(doc, colors, `导入色板 ${colors.length} 色`);
+  invalidateBitmaps(doc);
+  redrawCanvas();
+  setStatus(`已导入色板 ${colors.length} 色 · 按最近色重映射 ${changed} 格（Ctrl+Z 可撤销）`);
+});
+$("pal-export-hex").addEventListener("click", () => {
+  const doc = activeDoc();
+  if (!doc) return;
+  downloadText(`${doc.name}.hex`, paletteToHex(doc.paletteBase));
+  setStatus(`已导出 ${doc.paletteBase.length} 色 → ${doc.name}.hex`);
+});
+$("pal-export-gpl").addEventListener("click", () => {
+  const doc = activeDoc();
+  if (!doc) return;
+  downloadText(`${doc.name}.gpl`, paletteToGpl(doc.paletteBase, doc.name));
+  setStatus(`已导出 ${doc.paletteBase.length} 色 → ${doc.name}.gpl`);
+});
 
 function lineartZoom(v: number): number {
   return Math.max(0.05, Math.min(8, v));
@@ -1664,6 +2027,7 @@ function createBlank(): void {
     presetName: "photo",
     fill: new Int32Array(w * h).fill(WHITE_IDX),
     ink: null,
+    alpha: null,
     inkVisible: true,
     inkOpacity: 1,
     layers: [canvasLayer],
@@ -1743,6 +2107,7 @@ interface SessionLayer {
   kind: PFLayer["kind"];
   visible: boolean;
   data: Array<[number, CellOverride]>;
+  bg?: boolean; // M5-0：自动拆分出的背景层
 }
 interface SessionDocV1 {
   name: string;
@@ -1757,6 +2122,7 @@ interface SessionDocV1 {
   presetName?: string;
   fill: string; // Int32Array → base64
   ink: string | null;
+  alpha?: string; // M5-0：源 alpha 网格（Uint8 0/1 → base64）
   inkVisible?: boolean;
   inkOpacity?: number;
   layers: SessionLayer[];
@@ -1767,6 +2133,7 @@ interface SessionDocV1 {
   ms?: number;
   blank?: boolean;
   srcPath?: string;
+  srcKey?: string; // M5.2：IndexedDB 里的上传源文件引用（恢复后仍可重转换）
   dirty?: boolean;
   detailMask?: string; // M4：细节标记位图（Uint8 → base64，1=标记）
 }
@@ -1812,6 +2179,13 @@ function b64ToMask(b64: string, n: number): Set<number> {
   for (let i = 0; i < Math.min(n, bin.length); i++) if (bin.charCodeAt(i)) out.add(i);
   return out;
 }
+/** base64 → 长度 n 的 0/1 位图（越界补 0）。 */
+function b64ToU8(b64: string, n: number): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(n);
+  for (let i = 0; i < Math.min(n, bin.length); i++) out[i] = bin.charCodeAt(i) ? 1 : 0;
+  return out;
+}
 
 function serializeDoc(doc: EditorDoc, includeSource: boolean): SessionDocV1 {
   return {
@@ -1827,11 +2201,13 @@ function serializeDoc(doc: EditorDoc, includeSource: boolean): SessionDocV1 {
     presetName: doc.presetName,
     fill: i32ToB64(doc.fill),
     ink: doc.ink ? i32ToB64(doc.ink) : null,
+    alpha: doc.alpha ? u8ToB64(doc.alpha) : undefined,
     inkVisible: doc.inkVisible,
     inkOpacity: doc.inkOpacity,
     layers: doc.layers.map((l) => ({
       id: l.id, name: l.name, kind: l.kind, visible: l.visible,
       data: [...l.data.entries()] as Array<[number, CellOverride]>,
+      bg: l.bg,
     })),
     activeLayerId: doc.activeLayerId,
     baseLayerId: doc.baseLayerId,
@@ -1840,6 +2216,7 @@ function serializeDoc(doc: EditorDoc, includeSource: boolean): SessionDocV1 {
     ms: doc.ms,
     blank: doc.blank,
     srcPath: doc.src?.path,
+    srcKey: doc.src?.key,
     dirty: doc.dirty,
     detailMask: doc.detailMask?.size ? maskToB64(doc.detailMask, doc.w * doc.h) : undefined,
   };
@@ -1915,6 +2292,7 @@ async function loadSessionPayload(): Promise<SessionPayload | null> {
 
 function clearSession(): void {
   localStorage.removeItem(SESSION_KEY);
+  void clearSources(); // 上传源文件一并清掉，避免 IndexedDB 里留孤儿
   void fetch("/api/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1929,7 +2307,14 @@ function normalizeFill(arr: Int32Array, n: number): Int32Array {
   return out;
 }
 
-function restoreDoc(sd: SessionDocV1): void {
+async function restoreDoc(sd: SessionDocV1): Promise<void> {
+  // 源：服务器路径优先；否则从 IndexedDB 取回上传的原文件（M5.2 → 恢复后仍可重转换）
+  let src: EditorDoc["src"];
+  if (sd.srcPath) src = { path: sd.srcPath };
+  else if (sd.srcKey) {
+    const f = await getSource(sd.srcKey);
+    if (f) src = { file: f, key: sd.srcKey };
+  }
   if (sd.lineart) {
     // 线稿文档：无网格/图层/调色板，直接恢复源分辨率图
     const preset = sd.presetName ?? "lineart";
@@ -1946,6 +2331,7 @@ function restoreDoc(sd: SessionDocV1): void {
       presetName: preset,
       fill: new Int32Array(0),
       ink: null,
+      alpha: null,
       inkVisible: false,
       inkOpacity: 1,
       layers: [],
@@ -1954,7 +2340,7 @@ function restoreDoc(sd: SessionDocV1): void {
       sourceUrl: sd.sourceUrl ?? "",
       colorsUsed: 0,
       ms: sd.ms ?? 0,
-      src: sd.srcPath ? { path: sd.srcPath } : undefined,
+      src,
     });
     doc.dirty = sd.dirty ?? false;
     return;
@@ -1962,6 +2348,7 @@ function restoreDoc(sd: SessionDocV1): void {
   const layers: PFLayer[] = sd.layers.map((sl) => {
     const layer = mkLayer(sl.name, sl.kind);
     layer.visible = sl.visible;
+    if (sl.bg) layer.bg = true;
     for (const [i, ov] of sl.data) layer.data.set(i, { ...ov });
     return layer;
   });
@@ -1984,6 +2371,7 @@ function restoreDoc(sd: SessionDocV1): void {
     presetName: preset,
     fill: normalizeFill(b64ToI32(sd.fill ?? ""), n),
     ink: sd.ink ? normalizeFill(b64ToI32(sd.ink), n) : null,
+    alpha: sd.alpha ? b64ToU8(sd.alpha, n) : null,
     inkVisible: sd.inkVisible ?? true,
     inkOpacity: sd.inkOpacity ?? 1,
     layers,
@@ -1992,15 +2380,15 @@ function restoreDoc(sd: SessionDocV1): void {
     sourceUrl: sd.sourceUrl ?? "",
     colorsUsed: sd.colorsUsed ?? 0,
     ms: sd.ms ?? 0,
-    src: sd.srcPath ? { path: sd.srcPath } : undefined,
+    src,
     blank: sd.blank ?? false,
     detailMask: sd.detailMask ? b64ToMask(sd.detailMask, n) : undefined,
   });
   doc.dirty = sd.dirty ?? false;
 }
 
-function restoreSession(s: SessionPayload): void {
-  for (const sd of s.docs) restoreDoc(sd);
+async function restoreSession(s: SessionPayload): Promise<void> {
+  for (const sd of s.docs) await restoreDoc(sd);
   const docs = getState().docs;
   if (!docs.length) return;
   const ui = s.ui ?? {};
@@ -2038,7 +2426,7 @@ $("restore-yes").addEventListener("click", () => {
   const s = pendingSession;
   pendingSession = null;
   restoreDlg.close();
-  if (s) restoreSession(s);
+  if (s) void restoreSession(s);
 });
 $("restore-no").addEventListener("click", () => {
   pendingSession = null;
@@ -2065,7 +2453,7 @@ if (demoMode) {
     for (const [name, path, preset, size] of demos) {
       try {
         const r = await convertPath(path, preset, size);
-        docFromResponse(name, r, { path }, presetRecipe(preset), preset);
+        await docFromResponse(name, r, { path }, presetRecipe(preset), preset);
       } catch (err) {
         setStatus(`demo 失败: ${(err as Error).message}`);
       }
@@ -2088,6 +2476,33 @@ document.addEventListener("pf:set-active-layer", ((e: CustomEvent<string>) => {
   updateDoc(doc, { activeLayerId: e.detail });
 }) as EventListener);
 
+/* M5-6 标签右键菜单：复制配方到全部 / 导出此文档 */
+document.addEventListener("pf:recipes-to-all", ((e: CustomEvent<number>) => {
+  const src = getState().docs[e.detail];
+  if (!src) return;
+  const targets = getState().docs.filter((d) => !d.blank && d.src);
+  if (!targets.length) { setStatus("没有可应用的源图文档"); return; }
+  for (const d of targets) {
+    updateDoc(d, {
+      recipe: { ...src.recipe, seedColors: src.recipe.seedColors.map((c) => [...c] as [number, number, number]) },
+      presetName: src.presetName,
+    });
+  }
+  setStatus(`正在把「${src.name}」的配方应用到 ${targets.length} 个文档…`);
+  void (async () => {
+    for (const d of targets) await reconvertDoc(d);
+    redrawCanvas();
+    setStatus(`已把「${src.name}」的配方应用到 ${targets.length} 个文档`);
+  })();
+}) as EventListener);
+
+document.addEventListener("pf:export-doc", ((e: CustomEvent<number>) => {
+  const doc = getState().docs[e.detail];
+  if (!doc) return;
+  setActive(e.detail);
+  openExport();
+}) as EventListener);
+
 /* 装配面板 */
 mountTabs($("tabs"));
 mountLayers($("layers"));
@@ -2104,5 +2519,30 @@ if ((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV) {
     getState, activeDoc,
     autosave: () => autosave(true),
     importFiles: (files: File[]) => importFiles(files, "测试导入"),
+    /** M5-0 验收：合成导出的透明/不透明像素计数。 */
+    composeStats: (transparent: boolean) => {
+      const d = activeDoc();
+      if (!d || d.lineart) return null;
+      const cv = compositeDoc(d, { transparent });
+      const px = cv.getContext("2d")!.getImageData(0, 0, d.w, d.h).data;
+      let t = 0;
+      for (let i = 0; i < d.w * d.h; i++) if (px[i * 4 + 3] === 0) t++;
+      return { total: d.w * d.h, transparent: t, opaque: d.w * d.h - t };
+    },
+    /** M5-0 验收：源 alpha 网格统计。 */
+    alphaStats: () => {
+      const d = activeDoc();
+      if (!d?.alpha) return null;
+      let t = 0;
+      for (let i = 0; i < d.alpha.length; i++) if (!d.alpha[i]) t++;
+      return { total: d.alpha.length, transparent: t };
+    },
+    /** M5-0 验收：图层栈摘要。 */
+    layerSummary: () => {
+      const d = activeDoc();
+      return d
+        ? d.layers.map((l) => ({ name: l.name, visible: l.visible, bg: !!l.bg, base: l.id === d.baseLayerId }))
+        : null;
+    },
   };
 }

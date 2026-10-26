@@ -17,15 +17,32 @@ from engine.core.palette import nearest_palette_index
 from engine.recipe import Recipe
 from engine.types import GrayMap, IndexGrid, Palette
 
-_LINE_THR = 0.5
+_LINE_THR = 0.5          # 逐格墨线强度阈值
+_LINE_PIXEL = 0.25       # 判定"该源像素属于线"的线稿响应阈值
+_DENSITY_FULL = 0.5      # 覆盖率 ≤ 此值视为"一条线"（不衰减）；→1 视为实心区域（衰减到 0）
 
 
-def _cell_line_strength(L: GrayMap, grid_shape: tuple[int, int]) -> np.ndarray:
+def _cell_ink_strength(L: GrayMap, grid_shape: tuple[int, int]) -> np.ndarray:
+    """逐格墨线强度 = 格内线稿最大值 × 高密度衰减。
+
+    高密度衰减 damp = clip((1 − 覆盖率) / _DENSITY_FULL, 0, 1)：
+    - 细线（覆盖率 ≤ 0.5）→ damp = 1，行为与旧版一致；
+    - 整格被线稿填满（覆盖率 → 1）→ damp → 0：那是"实心区域"而不是"一条线"，
+      交给 Fill 层，避免深色纹理区被墨线成片糊住（128 格下尤其明显）。
+    """
     th, tw = grid_shape
     mapping = build_mapping(L.shape[:2], grid_shape)
-    out = np.zeros(th * tw, dtype=np.float32)
-    np.maximum.at(out, mapping.cell_index, L.ravel().astype(np.float32))
-    return out.reshape(th, tw)
+    n_cells = th * tw
+    flat = L.ravel().astype(np.float32)
+    strength = np.zeros(n_cells, dtype=np.float32)
+    np.maximum.at(strength, mapping.cell_index, flat)
+    counts = np.bincount(mapping.cell_index, minlength=n_cells).astype(np.float32)
+    line_px = np.bincount(
+        mapping.cell_index, weights=(flat > _LINE_PIXEL).astype(np.float32), minlength=n_cells
+    )
+    coverage = line_px / np.maximum(counts, 1.0)
+    damp = np.clip((1.0 - coverage) / _DENSITY_FULL, 0.0, 1.0)
+    return (strength * damp).reshape(th, tw)
 
 
 def _drop_isolated(mask: np.ndarray) -> np.ndarray:
@@ -45,7 +62,7 @@ def run(
     """返回 (Ink 层, 可能已扩展的调色板)。"""
     p = recipe.raw["ink"]
     th, tw = fill.data.shape
-    mask = _drop_isolated(_cell_line_strength(L, (th, tw)) >= _LINE_THR)
+    mask = _drop_isolated(_cell_ink_strength(L, (th, tw)) >= _LINE_THR)
     ink = np.full((th, tw), -1, dtype=np.int32)
 
     if not mask.any():

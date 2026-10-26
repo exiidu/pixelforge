@@ -10,7 +10,10 @@
 > 批量导入/导出命名模板与精灵图集、色板 OKLab 变换、描图底图、自动保存/会话恢复。
 > v1.5 变更（M4 实施后同步）：「细节」笔刷+三档强度+局部重算（`rerun_region`）、
 > 局部结果可撤销（含色板追加回滚）、掩码会话持久化。
-> **实施状态：M1 ✓ M2 ✓ M2.5–M2.9 ✓ M3 ✓ M3.1 ✓ M4 ✓（2026-10-25）。**
+> v1.6 变更（M5 实施后同步）：**真透明与主体分离**（源 alpha 网格 + 自动背景层 + 抠背景工具）、
+> 索引 PNG 导出（`/api/export_indexed`，PLTE+tRNS）、色板 .hex/.gpl 导入导出与单色编辑、
+> 色板锁定（`seed_colors`）、配方 JSON 导出/导入、标签拖拽排序与右键菜单。
+> **实施状态：M1 ✓ M2 ✓ M2.5–M2.9 ✓ M3 ✓ M3.1 ✓ M4 ✓ M5 ✓（2026-10-26）。**
 
 ---
 
@@ -23,7 +26,7 @@
 2. **无框架原生 TS**：面板少、画布是命令式渲染，原生 + 100 行 pub/sub store 足够。
 3. **渲染两级**：离屏 ImageData（网格分辨率）→ 最近邻拉伸到显示画布；编辑走脏矩形。
 4. **导出在前端合成**（canvas.toBlob，所见即所得）；索引 PNG（PLTE）走后端
-   `/api/export_indexed`（接收 fill/ink/调色板，含 override 后状态）。
+   `POST /api/export_indexed`（前端先合成索引网格 `.palette + indices`，引擎写 PLTE+tRNS）。
 5. **多文档为一等公民**（v1.1）：整个应用围绕 `Doc[] + activeIndex` 构建，
    选项卡、批量操作、会话恢复都以文档数组为中心。
 
@@ -37,7 +40,8 @@ interface EditorDoc {
   palette: [number, number, number][];
   fill: Int32Array;                  // 算法输出（重转换时整体替换）
   ink: Int32Array | null;            // -1 = 非墨线格
-  overrides: Map<number, CellOverride>;  // 手改层，重转换后重放
+  alpha: Uint8Array | null;          // M5-0 源 alpha 网格（0=透明 1=不透明）；null=无源透明
+  overrides: Map<number, CellOverride>;  // 手改层，重转换后重放（CellOverride 含 fill?/ink?/alpha?）
   layers: { fillVisible, inkVisible, inkOpacity, active: 'fill'|'ink' };
   dirty: boolean;                    // 有未导出手改（标签圆点）
 }
@@ -65,9 +69,9 @@ interface AppStore {
 ### 3.3 批量导出（✓ M3 子集）
 - 「导出全部 / 导出选中」：命名模板「自动（名称_输出尺寸）/ `{name}_{size}` /
   `{name}_{preset}`」；内容选项：像素画合成（1×–16×）/ 引擎线稿 / 像素墨线层（M2.9 三选）。
-  索引 PNG（走后端）与配方 JSON 尚未实现（后续）。
+  索引 PNG 与配方 JSON 见 M5（已实现）。
 - 尺寸不一致的文档各自按自身网格导出；**精灵图集模式**：按尺寸分组，同尺寸文档
-  合并为水平条带 spritesheet（每组一个文件，游戏资产常用）。
+  合并为水平条带 spritesheet（每组一个文件，游戏资产常用）。索引 PNG 不支持图集（各文档调色板不同）。
 
 ### 3.4 批量参数（✓ M3）
 - 参数面板顶部开关：`改动仅当前文档 / 应用到全部标签`——后者把当前配方
@@ -105,7 +109,7 @@ interface AppStore {
 - 画布 wrap 直接 flex:1 占满中央；原画布底栏撤销，缩放/网格/对比/描图底图（M3 滑杆）收进状态栏。
 - 工具卡与转换卡分离：编辑动作永不触发重转换，转换参数改动只作用于当前文档（"应用到全部"打开时广播，M3）。
 
-## 5. 工具集（M2.5 扩编定稿，M4 增「细节」笔刷共 13 个，PS 风格单色线性图标）
+## 5. 工具集（M2.5 扩编定稿，M4 增「细节」笔刷、M5-0 增「抠背景」共 14 个，PS 风格单色线性图标）
 
 | 工具 | 行为 | 快捷键 |
 |---|---|---|
@@ -121,6 +125,7 @@ interface AppStore {
 | 对称绘画 | H/V/四分镜像开关 | M 循环 |
 | **手掌** | 拖拽平移画布视图；**按住空格临时切换**（空格事件全量 preventDefault 防浏览器滚动，豁免输入控件/按钮） | H / 空格 |
 | **细节**（M4） | 拖拽标记「保细节」格子（橙色覆盖），**Alt=擦除**；标记不写像素、不入历史；「重算细节区」把标记区交给引擎局部重采样 | D |
+| **抠背景**（M5-0） | 写活动层 `alpha` 槽：拖拽刷透明（alpha=0）、**Alt=恢复默认**、**Shift+点=按色抠除**（泛洪同色连通域一次清空）；受选区限制，走统一历史栈可撤销 | W |
 
 选区模型 v2：`Selection = 矩形 ∥ 多边形{cells:Set,bounds,path}`；所有工具经统一 `scopeHas/scopeCells` 裁剪。翻转仅限矩形（多边形提示）。
 
@@ -143,8 +148,15 @@ interface AppStore {
   饱和度（0–2×）滑杆——`paletteBase` 原始板 + `paletteFx` 重生成显示色板，
   **格子的索引与手改一律不动**（改板不改画），一键全局换季/夜景；重置一键回原色。
 
-**后续（M4）**：
-- 锁定常用色、点击编辑单色、导入 .hex/.gpl（复用引擎资产格式）。
+**M5 已实施**：
+- **导入/导出色板**：`.hex`（每行 `RRGGBB`）与 `.gpl`（GIMP Palette）。导入**整板替换**
+  `paletteBase`（**格索引不动**，可撤销）；导出写 `paletteBase`。新板比原板短时，
+  超出范围的索引渲染为品红并在状态栏提示。
+- **单色编辑**：颜色库「替换当前色」→ 改 `paletteBase[colorIndex]`（索引/画布不动），
+  走统一历史栈（`HistEntry.palette` 前后快照），可撤销/重做。
+- **色板锁定（M5-4）**：勾选「锁定色板」后，重转换把当前色板（≤32 色）作为
+  `quantize.palette.seed_colors` 发给引擎——引擎从 `max_colors` 中扣减聚类预算，
+  锁定色去重（OKLab ΔE < 0.03）后追加到**色板尾部**；仅对「从源图提取」生效。
 
 ## 6.5 导出与反馈（v1.3 已实施）
 
@@ -160,9 +172,14 @@ interface AppStore {
     该模式下格式/倍率/宽高锁定；无源图（空白画布）预览提示并在批量导出时跳过。
   - **像素墨线层**：转换结果的网格墨线单独合成（`compositeLineart`，不受「线」叠加开关影响），
     固定 PNG；无墨线文档（如照片预设）预览提示「无墨线可预览」并批量跳过。
-- **透明背景导出**：勾选后 `composeDocCanvas` 走 ImageData alpha 路径——
-  底色取边缘格占比最高色，从画布四边 BFS 泛洪，连通底色区 alpha=0
-  （**轮廓外透明**，主体内部同色不打洞）；JPEG 强制白底。
+- **透明背景导出**：M5-0 起改读**真 alpha**——文档带源 alpha 网格（或手动抠除过的格子）时，
+  合成直接输出逐格真实 alpha（透明格露出画布棋盘格底）；**无 alpha 素材**沿用旧的边缘泛洪回退
+  （底色取边缘格占比最高色，从四边 BFS 泛洪，轮廓外 alpha=0，主体内部同色不打洞）；
+  不勾选透明时忽略 alpha（导出不透明，复现旧行为）；JPEG 强制白底。
+- **索引 PNG（M5）**：内容项「索引 PNG（PLTE 调色板 + 透明）」——前端把最终层栈合成索引网格
+  （`composeIndexGrid`：最上层不透明层的 fill 索引，透明格 -1，墨线可见时用墨线色），
+  `POST /api/export_indexed` 写出 8-bit 索引 PNG：只用到的颜色进 PLTE，含透明格时前置
+  一个占位色并把 tRNS 首位设为 0。最多 256 色（超出报错提示降色数）；倍率最近邻放大。
 - **铅笔实时笔迹（M2.8）**：笔画过程中只把变更格补丁进合成位图缓存
   （`patchBitmapCells`：单格重算合成色 → putImageData）再重绘，pointerup 前即可见笔迹；
   收笔时才走 commit 全量刷新。合成位图缓存改为显式失效
@@ -199,12 +216,39 @@ interface AppStore {
 - **失败保护**：job 过期（404）先自动重转换一次再重试；返回色板前缀与原文档不一致时直接报错不写画布。
 - **会话恢复**：掩码以 Uint8 位图 base64 存入会话（`detailMask` 字段），`ui.detailLevel` 一并恢复。
 
+## 6.7 真透明与主体分离（M5-0 已实施）
+
+透明背景素材（精灵图/抠好的 PNG）此前会在导入时被"白底合成"丢掉 alpha，导出透明只能靠
+边缘泛洪近似（会漏掉轮廓内部的透明孔洞）。M5-0 让 alpha 成为一等公民：
+
+- **引擎侧**：`io_utils.load_rgb_with_alpha()` 返回 `(rgb, alpha)`（`rgb` 与旧的 `load_rgb`
+  完全一致，白底合成行为不变，避免破坏 golden）。管线按**与 S2 采样相同的网格归属**
+  把源 alpha 下采样成**网格 alpha**（源区均值 ≥ 0.35 记不透明；无源像素落入的空档记不透明，
+  不把"没数据"当透明），挂在 `ConversionResult.alpha`。`convert/convert_file` 响应加
+  `alpha_png`（网格分辨率灰度 PNG）——**只在存在透明格时才给**，否则为 `null`（前端回退边缘泛洪）。
+  `rerun_region` 不改 alpha（与 fill 正交）。
+- **前端合成语义**：`CellOverride` 增 `alpha?: number`（与 fill/ink 正交）；`EditorDoc.alpha`
+  为源 alpha 网格。`cellColor` 自顶向下取**第一个 alpha≠0 的格**（上层透明露出下层），
+  并把该格 alpha 写进 ImageData——画布透明格自然露出 `.pf-canvaswrap` 的棋盘格 CSS 底。
+  `layerAlphaAt`：base 层回落到 `doc.alpha`，其余层默认不透明。无 alpha 的文档行为与旧版**完全一致**。
+- **导入自动拆分**：有透明格时自动在 base 层下方插入「背景层」（透明格补**边缘主色**，
+  默认隐藏=真透明，可显隐/删除还原背景）；重转换时刷新该层内容（源已无透明则移除）。
+- **抠背景工具（W）**：拖拽刷 `alpha=0`（Alt 恢复默认）、Shift+点「按色抠除」
+  （泛洪同色连通域一次清掉整片背景），受选区限制；写入活动层 alpha 槽，走统一历史栈可撤销。
+- **会话**：`alpha` 以 0/1 位图 base64 存储，背景层随 `layers` 的 `bg` 标记一起恢复。
+
+**M5.1 已修复**：放大网格的黑色发丝线。`build_mapping` 额外给出 `covered`（哪些格有源像素）与
+`cell_src`（每格代表源像素 = 格中心 floor）；放大时源像素数 < 格数必然有空档格，采样后由
+`s2_sampling.fill_empty_cells` 用代表源像素回填（否则落成 0/黑）。缩小与等尺寸时 `covered` 全 True，
+回填是空操作——**输出与修复前逐位一致**（回归保护见 `test_downscale_output_unchanged_by_fill`）。
+另：空白画布模式默认折叠「转换工具」与「细节增强」两张卡（`<details>` 卡片，切换文档时重置为文档类型对应的默认态，用户可手动展开）。
+
 ## 7. 与后端的交互
 
 ```
-批量打开 ─ 循环 POST /api/convert_file ─ 建档（进度条）
-参数改动 ─ 防抖300ms ─ POST /api/convert（仅当前）/ 全部（广播 overrides）
-索引导出 ─ POST /api/export_indexed {fill, ink, palette} → PNG 字节（待实现）
+批量打开 ─ 循环 POST /api/convert_file ─ 建档（进度条；响应可带 alpha_png）
+参数改动 ─ 防抖300ms ─ POST /api/convert（仅当前）/ 全部（广播 overrides；可带 seed_colors）
+索引导出 ─ POST /api/export_indexed {palette, indices, width, height} → 带 PLTE(+tRNS) 的 PNG 字节
 引擎线稿 ─ POST /api/lineart（路径）| POST /api/lineart_file（上传）→ 黑线白纸 PNG（源图分辨率）
 细节重算 ─ POST /api/rerun_region {job_id, region_png, param_delta, expand_colors} → 局部结果（链式更新 job）
 自动保存 ─ POST /api/session {data} → web/session.json；恢复 ─ GET /api/session
@@ -212,10 +256,10 @@ interface AppStore {
 ```
 
 端点状态：
-1. ✅ convert/convert_file 响应含 `source_png`（≤1024 缩略：对比浮层/描图底图）；
+1. ✅ convert/convert_file 响应含 `source_png`（≤1024 缩略：对比浮层/描图底图）与 `alpha_png`（M5-0）；
 2. ✅ `GET/POST /api/session`（会话恢复/自动保存 → `web/session.json`，M3）；
 3. ✅ `POST /api/rerun_region`（M4：掩码局部重算，固定色板+尾部追加色，结果写回 job 支持链式）；
-4. ⬜ `POST /api/export_indexed`（接收文档状态含 override → 带 PLTE 的 PNG）；
+4. ✅ `POST /api/export_indexed`（M5：索引网格 → PLTE+tRNS 索引 PNG，仅用到的色入板）；
 5. ⬜ （可选，量大时）`POST /api/convert_batch` 并行转换 + 进度查询。
 
 ## 8. 项目结构（实际落地）
@@ -225,16 +269,16 @@ pixelforge/web/
   index.html              # 三栏布局 + 新建画布/导出/进度三个 dialog + 右键菜单
   vite.config.ts          # dev 代理 /api → 127.0.0.1:8700
   src/
-    main.ts               # 装配 + 指针绘制状态机 + 快捷键 + 参数面板/批量导入导出 + 会话恢复
-    store.ts              # 多文档 pub/sub（Doc[]+activeIndex+工具状态+自定义色架+每文档配方/图层）
-    tools.ts              # 手改层操作全家：笔画缓冲/形状/磁力套索/移动/撤销重做/颜色入库
-    render.ts             # 两级渲染（离屏 ImageData→最近邻）+网格线+选区（矩形/多边形蚂蚁线）
+    main.ts               # 装配 + 指针绘制状态机 + 快捷键 + 参数面板/批量导入导出 + 色板/配方 IO + 会话恢复
+    store.ts              # 多文档 pub/sub（Doc[]+activeIndex+工具状态+自定义色架+每文档配方/图层/alpha）
+    tools.ts              # 手改层操作全家：笔画缓冲/形状/磁力套索/移动/撤销重做/颜色入库/抠背景/色板历史
+    render.ts             # 两级渲染（离屏 ImageData→最近邻）+网格线+选区（矩形/多边形蚂蚁线）+索引网格合成
     api.ts  color.ts  icons.ts
-    panels/index.ts       # tabs/layers/palette(排序+自定义色架)/history/tools/colorlib
+    panels/index.ts       # tabs（拖拽重排+右键菜单）/layers/palette(排序+自定义色架)/history/tools/colorlib
   styles/main.css         # .pf-* 体系（:root 设计变量）
 ```
 
-## 9. 里程碑（v1.3 实施状态）
+## 9. 里程碑（v1.6 实施状态）
 
 | 里程碑 | 内容 | 验收 | 状态 |
 |---|---|---|---|
@@ -248,6 +292,32 @@ pixelforge/web/
 | **M3 参数+批量** | 参数面板接真后端（含"应用到全部"）、批量导入/批量导出命名模板/图集、色板变换、描图底图、自动保存/会话恢复 | 10 张图批量入→调参→批量出 | ✅ 2026-10-25（10 张批量导入→maxColors=16 广播→图集导出全过；参数/色板/描图/会话恢复另测通过） |
 | **M3.1 线稿图像模式** | `线稿提取` 改为源分辨率连续图像文档（非像素网格）：隐藏尺寸与参数、只读查看/平滑缩放/对比、默认引擎线稿导出；参数面板默认折叠 | 400×300 源图导入→画布 400×300 非像素化→导出 `_lineart.png`→切回照片重建 64 网格；会话恢复保留线稿资产 | ✅ 2026-10-25 |
 | **M4 局部细节重算** | 「细节」笔刷标记掩码（Alt 擦除、橙色覆盖）+ 三档强度；引擎 `rerun_region` 只重跑 S2、固定色板量化、extract 尾部追加色、ink 保留；`BasePatch` 入历史（撤销/重做含色板）；掩码会话持久化 | 引擎 9 单测（区域外不变/前缀稳定/链式/ink 保留/错误路径）；浏览器：标记 266 格→重算 +1 色→撤销/重做一致→会话恢复掩码；tsc + pytest 42 通过 | ✅ 2026-10-25 |
+| **M5-0 真透明与主体分离** | `load_rgb_with_alpha` + 网格 alpha（与 fill 正交，阈值 0.35）；响应加 `alpha_png`；前端合成改"第一个 alpha≠0 的格"、画布露棋盘格；导入自动拆分「背景层」（默认隐藏）；「抠背景」工具（W：刷透明/Alt 恢复/Shift 按色抠除）；导出读真 alpha、无 alpha 回退边缘泛洪；alpha 会话持久化 | 引擎：opaque 源 `alpha_png=null`、透明源逐格一致、空档不误判（pytest 53→65）；浏览器：128×128 透明源→棋盘格+3 层（背景层隐藏）→显隐背景层透明计数 2496↔0→抠背景 +1 格→Ctrl+Z/Y 一致→不透明源回退边缘泛洪（2940 透明） | ✅ 2026-10-26 |
+| **M5-1/2 索引 PNG 导出** | 引擎 `POST /api/export_indexed`（只用到的色入 PLTE、含透明时前置占位色 + tRNS 首位 0、最近邻缩放、>256 色报错）；前端 `composeIndexGrid` + 导出窗内容项「索引 PNG」 | 引擎 6 单测（含透明/不透明/只留用色/缩放/超 256/坏输入）；浏览器：64×64 colorType=3 有 PLTE+tRNS、2× 得 128×128、取消透明则不写 tRNS | ✅ 2026-10-26 |
+| **M5-3 色板导入导出 + 单色编辑** | `.hex`/`.gpl` 导入（整板替换、索引不动）与导出；颜色库「替换当前色」改 `paletteBase[k]` 且入历史（`HistEntry.palette`） | 浏览器：`.hex` 4 行/`.gpl` GIMP 头且数据行数=板长；导入 3 色板→历史标签「导入色板 3 色」→Ctrl+Z 复原；单色替换仅该索引变、Ctrl+Z 复原 | ✅ 2026-10-26 |
+| **M5-4 色板锁定** | `quantize.palette.seed_colors`（≤32）：引擎从 `max_colors` 扣减聚类预算、锁定色 ΔE<0.03 去重后追加尾部；前端「锁定色板」勾选即以当前板为锁定色并在重转换时刷新 | 引擎 5 单测（尾部追加/扣减预算/去重/预算耗尽仅种子/≤32 与 builtin 不受影响）；HTTP：max_colors=8+2 种子 → 板长 8 且尾=种子 | ✅ 2026-10-26 |
+| **M5-5 配方 JSON** | 「导出配方」写 `{type,version,preset,recipe,size}`；「导入配方…」白名单校验 + 钳制后套用并立即重转换（可选带尺寸） | 浏览器：导出 JSON 含 12 个 recipe 键且 `seedColors` 为数组；导入 `{maxColors:24, edge:3.2, softRatio:1.8, ink:true, lineart:xdog}` → 回显一致且已重转换 | ✅ 2026-10-26 |
+| **M5-6 标签拖拽与右键菜单** | 标签 `draggable` 拖拽重排（`moveDoc` 保持活动文档）；右键菜单：复制配方到全部 / 导出此文档 / 关闭其他 / 关闭右侧 | 浏览器：3 文档拖首→尾顺序 `[aaa,bbb,ccc]`→`[bbb,ccc,aaa]` 且活动不变；菜单 4 项；「关闭右侧」3→2 | ✅ 2026-10-26 |
+| **M5.1 补丁** | 修复放大网格的黑色发丝线（`covered`/`cell_src` + `fill_empty_cells` 回填空档）；「转换工具」「细节增强」改 `<details>` 卡片，空白画布默认折叠 | 引擎 6 新单测（空档报告/代表像素单调/纯色放大无黑格/放大仅源色/缩小回归/fill 空操作）；pytest 65→71；HTTP：48×48 纯色→64 网格 **dark_cells 0**（修复前 1792）、2×2→5 仅 4 源色、64→16 缩小不变；浏览器：导入 48×48→darkCells 0 且两卡展开→新建画布两卡折叠（标题仍可见、preset 行隐藏）→点击标题可展开→切回原文档两卡恢复 | ✅ 2026-10-26 |
+| **M5.2 P1 手感与可靠性** | ① B1 上传源文件存 IndexedDB（会话恢复后可重转换）；② B2 色架删除可撤销（5 秒浮条）；③ B3 色板导入按 OKLab 最近色重映射索引（一条历史）；④ **非正方形素材保宽高比**（`target.preserve_aspect`，尺寸=长边）；⑤ E 自适应归一化 + 墨线高覆盖度衰减 | ①②③ 浏览器验证（idbCount/srcKey、刷新恢复后重转换 96→32、色架删除→撤销复原、导入板越界格 0 且 Ctrl+Z 复原）；④ HTTP：240×135→**64×36**、135×240→**36×64**、正方形→64×64、关闭开关→64×64；pytest 71→74、tsc 干净；⑤ 实测对 1488² 人物立绘影响≈0（见下注） | ✅ 2026-10-26 |
+
+> **M5.2 注（A3 墨线质量）**：`test.png`（1488² 人物立绘）实测——XDoG 线像素占全图 9.3%，128 格下每格覆盖 11.6×11.6≈135 源像素，
+> 按"格内取 max"判据**任何含线像素的格都判墨线** → 墨线 27.3%，且与阈值（0.5→0.9 仅 27.3→26.8%）和 XDoG ε（0.72→0.90）几乎无关。
+> 即低网格下的"墨线≈主体剪影"是**分辨率与线密度**的结果，不是阈值缺陷。
+
+### M5.3 浅色区（天空/云）的层次表达
+
+`test2.jpg`（1920×1200 日落拱桥，网格 128×80）实测：**线**这条路走不通——
+亮部（天空）格子的 XDoG 响应**中位数恰为 0**，线像素占比仅 0.6%（暗部 43.5%）；调阈值（0.5→0.15：墨线格 25%→27%）、
+按格亮度自适应阈值（→27%）、亮部低频"相对邻域暗"项 + 放大 50×（→28% 饱和）、换 **ONNX** 线稿（亮部 0.4%，更差）全部无效。
+根因：XDoG 与 ONNX 都是**绝对亮度**算子，云的软梯度只有 1–2 个灰度级，信息量本身不足以成"线"。
+
+**落地做法（默认关闭，可一行回滚）**：把层次交给 **fill 色块** ——
+- `preprocess.levels.bright_contrast`（0–0.95，默认 **0**）+ `bright_start`（默认 0.6）：在 `[start,1]` 区间做以中点为轴的 S 曲线
+  `t2 = t − c·(t − smoothstep(t))`，端点固定（不裁切）、中点斜率 `1 + c/2`，按比例缩放 RGB 保持色相饱和度 → **只动亮区，暗部与中间调逐位不变**。
+- 实测 `test2.jpg`：天空用到色数 **8 → 12**（c=0.5），最大单色块占比 **63% → 40%**；c=0.8/0.95 反而回落（10/9 色，端点压缩过头）。
+- 现状：**全局默认 0（photo/lineart 不受影响）**，仅 `recipes/illustration.json` 设 `0.5`；对比图见 `D:\pixelforge\a3-bright-contrast-compare.png`。
+- 线稿侧另留实验开关 `structure.lineart.xdog.log_domain`（Weber/log 域亮部线，默认 **false**）——实测只 +3% 且饱和，暂不启用。
 
 ## 10. 对标专业软件的取舍清单
 

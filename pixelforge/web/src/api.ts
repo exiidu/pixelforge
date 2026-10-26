@@ -7,6 +7,8 @@ export interface ConvertResponse {
   palette: [number, number, number][];
   fill: number[][];
   ink: number[][] | null;
+  /** M5-0：网格 alpha 灰度 PNG（base64，网格分辨率）；null = 无源透明（导出回退边缘泛洪）。 */
+  alpha_png: string | null;
   preview_png: string;
   source_png: string | null;
   meta: { colors_used: number; grid_ms: number; [k: string]: unknown };
@@ -38,7 +40,10 @@ export async function convertFile(
   const fd = new FormData();
   fd.append("file", file);
   fd.append("recipe", preset);
-  fd.append("overrides", JSON.stringify({ ...overrides, target: { width: size, height: size } }));
+  // preserve_aspect：尺寸=长边，按源图宽高比出网格（非正方形素材不被拉方）
+  fd.append("overrides", JSON.stringify({
+    ...overrides, target: { width: size, height: size, preserve_aspect: true },
+  }));
   const res = await ensureOk(await fetch("/api/convert_file", { method: "POST", body: fd }));
   return res.json();
 }
@@ -57,7 +62,8 @@ export async function convertPath(
       body: JSON.stringify({
         image_path: imagePath,
         recipe: preset,
-        overrides: { ...overrides, target: { width: size, height: size } },
+        // preserve_aspect：尺寸=长边，按源图宽高比出网格（非正方形素材不被拉方）
+        overrides: { ...overrides, target: { width: size, height: size, preserve_aspect: true } },
       }),
     }),
   );
@@ -97,6 +103,31 @@ export async function extractLineartPath(imagePath: string, mode = "onnx"): Prom
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image_path: imagePath, mode }),
+    }),
+  );
+  return res.json();
+}
+
+/** M5-1：把前端最终索引网格写成带 PLTE(+tRNS) 的索引 PNG（游戏引擎友好）。 */
+export interface IndexedPngResponse {
+  png: string;      // base64（无 data: 前缀）
+  width: number;
+  height: number;
+  colors: number;   // 输出调色板颜色数（含透明占位）
+  transparent: boolean;
+}
+
+export async function exportIndexed(
+  palette: [number, number, number][],
+  indices: number[][],
+  width: number,
+  height: number,
+): Promise<IndexedPngResponse> {
+  const res = await ensureOk(
+    await fetch("/api/export_indexed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ palette, indices, width, height }),
     }),
   );
   return res.json();

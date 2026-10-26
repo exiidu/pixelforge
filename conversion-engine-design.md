@@ -35,10 +35,17 @@ ConversionJob:
   Fill:    IndexGrid<W,H>     # 底色层：调色板索引
   Ink:     IndexGrid<W,H>     # 墨线层（可选）：调色板索引
   palette: Palette            # 使用的调色板（来源 + 颜色）
+  Alpha:   Array<u8> (W×H)    # M5-0 与 Fill 正交的网格 alpha：0=透明 1=不透明
   Result:  合成结果           # Fill ⊕ Ink，导出为索引 PNG
 ```
 
 关键点：**输出层用索引色（palette index）而非 RGBA**。这使引擎与像素编辑器共享同一数据结构——转换结果直接进编辑器，编辑器里的手改也可以回注（见 §6 增量转换）。
+
+> **实现现状（2026-10-26）**：`ConversionResult.alpha` 为 `(h,w) uint8` 0/1（源区 alpha 均值 ≥ 0.35 记不透明；放大时无源像素落入的空档记不透明）。
+> `convert/convert_file` 响应在**存在透明格**时附 `alpha_png`（网格分辨率灰度 PNG base64），否则为 `null`；`rerun_region` 不改 alpha。
+> **放大网格的空档（M5.1）**：源图边长 < 目标格数时源像素数少于格数，按"源像素→格"归属必然有空档格。`build_mapping` 为此额外给出
+> `covered`（格是否有源像素）与 `cell_src`（每格代表源像素 = 格中心 floor）；`s2_sampling.fill_empty_cells` 用代表源像素回填空档，
+> 否则空档格采样落成 0（黑）→ 渲染为"黑色发丝线"。缩小/等尺寸时回填是空操作（输出与修复前一致）。
 
 ## 3. 管线设计
 
@@ -150,7 +157,8 @@ S5 后处理 ──────── 孤立像素清理 → 色簇平滑（可�
     "regions": [ { "mask": "...", "override": { ... } } ]   // v1.5
   },
   "quantize": {
-    "palette": { "source": "builtin | extract | custom", "ref": "AAP-64", "max_colors": 64 },
+    "palette": { "source": "builtin | extract | custom", "ref": "AAP-64", "max_colors": 64,
+                 "seed_colors": [] },   // M5-4 色板锁定：≤32 色强制保留（从 max_colors 扣减预算、ΔE<0.03 去重、追加尾部）
     "dither":  { "mode": "off | bayer", "matrix": 4 }
   },
   "ink": {
@@ -166,8 +174,9 @@ S5 后处理 ──────── 孤立像素清理 → 色簇平滑（可�
 ## 6. 引擎 ↔ 编辑器接口
 
 ```
-POST /api/convert        {image, recipe} → {fill, ink, palette, preview}
+POST /api/convert        {image, recipe} → {fill, ink, palette, alpha_png?, preview}
 POST /api/rerun_region   {jobId, regionMask, paramDelta} → {fill(仅区域内), ...}
+POST /api/export_indexed {palette, indices, width, height} → 带 PLTE(+tRNS) 的索引 PNG（M5）
 GET  /api/stage/{jobId}/{stage}   → 任一中间产物（P0/E/L/I/…），验证与调参用
 WS   /api/preview        参数变更推送实时预览
 POST /api/extract_palette {image, k} → 调色板

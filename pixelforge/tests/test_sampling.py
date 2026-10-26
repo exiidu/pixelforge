@@ -105,3 +105,42 @@ def test_contrast_weight_keeps_bright_highlight():
     )
     assert with_w[0, 1].min() > 200   # 高光保住
     assert without[0, 1].max() < 160  # 无此项时按像素数输给背景
+
+
+# ---------------- 放大网格的空档回填（黑色发丝线修复） ----------------
+
+def _recipe(tw: int, th: int):
+    from engine.recipe import load_recipe
+    return load_recipe("photo", {"target": {"width": tw, "height": th}})
+
+
+def test_upscale_solid_image_has_no_black_holes():
+    """放大（源 4×4 → 网格 6×6）时空档格必须回填，不能落成黑。"""
+    img = np.full((4, 4, 3), 200, dtype=np.uint8)
+    E = np.zeros((4, 4), dtype=np.float32)
+    out = s2_sampling.run(img, E, _recipe(6, 6), (6, 6))
+    assert out.shape == (6, 6, 3)
+    assert (out > 150).all(), f"存在黑色空档格：min={out.min()}"
+
+
+def test_upscale_preserves_source_colors():
+    """放大后每格颜色应取自源像素（最近邻展开），不引入新色、不出现黑格。"""
+    img = np.zeros((2, 2, 3), dtype=np.uint8)
+    img[0, 0], img[0, 1] = [255, 0, 0], [0, 255, 0]
+    img[1, 0], img[1, 1] = [0, 0, 255], [255, 255, 0]
+    E = np.zeros((2, 2), dtype=np.float32)
+    out = s2_sampling.run(img, E, _recipe(5, 5), (5, 5)).reshape(-1, 3).astype(np.int16)
+    src = np.array([[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]], dtype=np.int16)
+    nearest = np.abs(out[:, None, :] - src[None, :, :]).max(-1).min(1)
+    assert (nearest <= 2).all(), f"偏离源色过多：{nearest.max()}"
+
+
+def test_downscale_output_unchanged_by_fill():
+    """缩小/等尺寸时 covered 全 True，回填是空操作（回归保护）。"""
+    img = np.full((16, 16, 3), 90, dtype=np.uint8)
+    E = np.zeros((16, 16), dtype=np.float32)
+    m = build_mapping((16, 16), (4, 4))
+    sampled = s2_sampling.sample_mean(img, m)
+    assert s2_sampling.fill_empty_cells(sampled, img, m) is sampled  # 直接返回、未拷贝
+    out = s2_sampling.run(img, E, _recipe(4, 4), (4, 4))
+    assert (out == 90).all()
