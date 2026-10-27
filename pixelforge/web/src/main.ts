@@ -2529,12 +2529,12 @@ if (!sessionDisabled) {
   });
 }
 
-/* demo 模式：?demo=1 自动从引擎拉测试图建档（自动化验收/快速体验） */
+/* demo 模式：?demo=1 自动从引擎拉仓库内的合成测试图建档（自动化验收/快速体验） */
 if (demoMode) {
   const demos: Array<[string, string, string, number]> = [
     ["scene", "tests/golden/scene.png", "photo", 64],
-    ["girl_umbrella", "tests/golden/inputs/girl_umbrella.png", "illustration", 64],
     ["scene_48", "tests/golden/scene.png", "photo", 48],
+    ["rgba", "tests/golden/inputs/rgba_test.png", "illustration", 64],
   ];
   (async () => {
     for (const [name, path, preset, size] of demos) {

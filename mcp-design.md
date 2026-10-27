@@ -90,14 +90,14 @@ AI：  pixelforge_convert(edge_w=2.0) → 看预览图
       → 满意 → 保存配方 pixelforge_save_recipe("portrait-v1")
 ```
 
-以及对话式批量：「把 D:\arts 里所有图用 Game Boy 调色板转 48 格导出到 out\」。
+以及对话式批量：「把 <图片目录> 里所有图用 Game Boy 调色板转 48 格导出到 <输出目录>」。
 
 ## 4. 实现清单
 
 ```
 pixelforge/engine/mcp_server.py     # MCPServer stdio 服务（19 工具）
 客户端配置示例（ZCode）：
-  {"command": "python", "args": ["-m", "engine.mcp_server"], "cwd": "D:\\pixelforge\\pixelforge"}
+  {"command": "python", "args": ["<仓库>/pixelforge/mcp_launcher.py"]}
 ```
 
 依赖：`pip install "mcp>=2.3"`（或仓库内 `pip install -e ".[mcp]"`；SDK 2.x 的类名为 `MCPServer`）。

@@ -1,8 +1,8 @@
 """PixelForge MCP 启动器（供 MCP 客户端直接调用，不依赖 cwd）。
 
 客户端配置示例：
-  command: "C:\\Program Files\\Python312\\python.exe"
-  args: ["D:\\pixelforge\\pixelforge\\mcp_launcher.py"]
+  command: "python"
+  args: ["<仓库>/pixelforge/mcp_launcher.py"]
 """
 
 import sys

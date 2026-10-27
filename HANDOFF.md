@@ -19,7 +19,7 @@
 
 - **`start_all.bat`**（仓库根）：双击 = 引擎(:8700) + 前端(:5173) + 就绪后自动开浏览器；路径相对脚本，仓库可移动。
 - 手动：`cd pixelforge && python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700`；`cd pixelforge/web && npm run dev`。
-- 编辑器：http://localhost:5173（`?demo=1` 自动开 3 张测试图，供自动化验收）。
+- 编辑器：http://localhost:5173（`?demo=1` 自动开 3 张仓库内合成测试图，供自动化验收）。
 - 引擎单独启动脚本：`start_engine.bat`；macOS/Linux 可用 `start_all.sh`。
 - 测试：`cd pixelforge && python -m pytest -q`（101 个单测）。
 - 前端构建：`cd pixelforge/web && npx tsc --noEmit && npm run build`（dev 模式 HMR 即时生效，构建产物 dist/ 仅备查）。

@@ -171,8 +171,8 @@ def _request(method: str, path: str, payload: dict | None = None) -> dict:
         raise RuntimeError(f"引擎返回 {e.code}: {detail}") from e
     except urllib.error.URLError as e:
         raise RuntimeError(
-            f"引擎离线（{ENGINE_URL}）：请先在 D:\\pixelforge\\pixelforge 下运行 "
-            "`python -m uvicorn engine.server.api:app --port 8700`"
+            f"引擎离线（{ENGINE_URL}）：请在仓库的 pixelforge 目录运行 "
+            "`python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700`"
         ) from e
 
 
