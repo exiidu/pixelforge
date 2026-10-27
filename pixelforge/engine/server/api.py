@@ -41,6 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel
 
+from engine.ai.runtime import device_info
 from engine.pipeline import AIProviders, ConversionPipeline
 from engine.recipe import Recipe, load_recipe, preset_names
 from engine.stages import s5_post
@@ -54,7 +55,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="PixelForge Engine", version="0.3.0", lifespan=_lifespan)
+app = FastAPI(title="PixelForge Engine", version="0.4.0", lifespan=_lifespan)
 
 
 def _cors_origins() -> list[str]:
@@ -578,6 +579,7 @@ def _job_index_grid(result, transparent: bool) -> np.ndarray:
 def health():
     models_dir = Path(__file__).resolve().parents[2] / "models"
     ai = AIProviders()  # 惰性构造，仅看类型
+    dev = device_info()
     return {
         "status": "ok",
         "version": app.version,
@@ -586,6 +588,14 @@ def health():
             "lineart": (models_dir / "lineart" / "model.onnx").exists(),
             "matting_u2net": (models_dir / "matting" / "u2net.onnx").exists(),
             "matting_u2netp": (models_dir / "matting" / "u2netp.onnx").exists(),
+        },
+        "ai_device": {
+            "requested": dev.requested,
+            "active": dev.active,
+            "providers": list(dev.providers),
+            "available": list(dev.available),
+            "onnxruntime": dev.onnxruntime,
+            "fallback": dev.fallback,
         },
         "providers": {
             "lineart": type(ai.lineart).__name__,

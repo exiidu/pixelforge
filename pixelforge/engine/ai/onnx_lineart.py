@@ -1,9 +1,10 @@
-"""Informative Drawings 线稿 Provider（ONNX，CPU）。
+"""Informative Drawings 线稿 Provider（ONNX；CPU / CUDA / DirectML）。
 
 模型: models/lineart/model.onnx（动态输入 (1,3,H,W)，2026-10-24 实测）
 预处理: (rgb/255 − 0.5)/0.5 → [−1,1]（原项目 Normalize(0.5,0.5,0.5)/(0.5,0.5,0.5)）
 输出: tanh → (out+1)/2 ∈ [0,1]（白纸黑线）；引擎约定 1=线，故取反。
 超过 max_side 的输入先等比缩小（模型为全卷积，尺寸可变），结果再放大回原尺寸。
+设备由 `engine.ai.runtime` 按 PIXELFORGE_DEVICE / 可用 EP 选择（0.4.0）。
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from engine.ai.runtime import create_session
 from engine.types import GrayMap, RGBImage
 
 MODELS_DIR = Path(__file__).resolve().parents[2] / "models" / "lineart"
@@ -25,6 +27,7 @@ class OnnxLineartProvider:
         self.max_side = max_side
         self._session = None
         self._input_name = ""
+        self.providers: list[str] = []
 
     def _get_session(self):
         if self._session is None:
@@ -32,11 +35,8 @@ class OnnxLineartProvider:
                 raise FileNotFoundError(
                     f"线稿模型不存在: {self._model_path}（下载源见 models/README.md）"
                 )
-            import onnxruntime as ort
-
-            self._session = ort.InferenceSession(
-                str(self._model_path), providers=["CPUExecutionProvider"]
-            )
+            self._session = create_session(self._model_path)
+            self.providers = list(self._session.get_providers())
             self._input_name = self._session.get_inputs()[0].name
         return self._session
 

@@ -1,6 +1,6 @@
 [project]
 name = "pixelforge"
-version = "0.3.0"
+version = "0.4.0"
 description = "图片转像素画引擎：分层索引色输出，确定性管线 + 可选 AI 增强"
 license = "MIT"
 requires-python = ">=3.11"
@@ -21,6 +21,8 @@ include = ["engine*"]
 
 [project.optional-dependencies]
 ai = ["onnxruntime"]      # AI 档接入时安装（线稿/抠图模型）
+gpu = ["onnxruntime-gpu>=1.22"]        # CUDA；与 ai 互斥（会替换 onnxruntime）
+directml = ["onnxruntime-directml>=1.22"]  # Windows 通用 GPU；与 ai 互斥
 mcp = ["mcp>=2.3"]        # MCP 服务器（stdio）
 dev = ["pytest", "mcp>=2.3"]
 

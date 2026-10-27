@@ -107,6 +107,54 @@ def test_contrast_weight_keeps_bright_highlight():
     assert without[0, 1].max() < 160  # 无此项时按像素数输给背景
 
 
+# ---------------- 0.4.0：稀疏 Top-K 与稠密实现等价 ----------------
+
+def _bucketize(flat: np.ndarray) -> np.ndarray:
+    return (
+        ((flat[:, 0] >> s2_sampling._BUCKET_SHIFT).astype(np.int64) * s2_sampling._BUCKETS_PER_CH
+         + (flat[:, 1] >> s2_sampling._BUCKET_SHIFT).astype(np.int64))
+        * s2_sampling._BUCKETS_PER_CH
+        + (flat[:, 2] >> s2_sampling._BUCKET_SHIFT).astype(np.int64)
+    )
+
+
+def test_sparse_top_candidates_match_dense():
+    """非并列权重下，稀疏直方图必须选出与稠密版相同的 Top-K。"""
+    from engine.core.oklab import srgb_to_linear
+
+    rng = np.random.default_rng(11)
+    img = rng.integers(0, 256, (48, 40, 3), dtype=np.uint8)
+    mapping = build_mapping((48, 40), (12, 16))
+    n_cells = 12 * 16
+    flat = img.reshape(-1, 3)
+    lin = srgb_to_linear(flat).astype(np.float32)
+    w = rng.random(len(flat)).astype(np.float32)  # 权重互不相等，避免并列
+    bucket = _bucketize(flat)
+
+    dw, dc = s2_sampling._top_candidates_dense(mapping, bucket, w, lin, n_cells)
+    sw, sc = s2_sampling._top_candidates_sparse(mapping, bucket, w, lin, n_cells)
+
+    assert np.allclose(np.sort(dw, axis=1), np.sort(sw, axis=1))
+    assert np.allclose(dc.sum(1), sc.sum(1), atol=1e-5)
+
+
+def test_top_candidates_small_grid_uses_dense_branch():
+    from engine.core.oklab import srgb_to_linear
+
+    rng = np.random.default_rng(12)
+    img = rng.integers(0, 256, (16, 16, 3), dtype=np.uint8)
+    mapping = build_mapping((16, 16), (16, 16))
+    n_cells = 16 * 16
+    flat = img.reshape(-1, 3)
+    lin = srgb_to_linear(flat).astype(np.float32)
+    w = rng.random(len(flat)).astype(np.float32)
+    bucket = _bucketize(flat)
+
+    hybrid = s2_sampling._top_candidates(mapping, bucket, w, lin, n_cells)
+    dense = s2_sampling._top_candidates_dense(mapping, bucket, w, lin, n_cells)
+    assert np.array_equal(hybrid[0], dense[0]) and np.array_equal(hybrid[1], dense[1])
+
+
 # ---------------- 放大网格的空档回填（黑色发丝线修复） ----------------
 
 def _recipe(tw: int, th: int):

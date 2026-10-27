@@ -424,4 +424,7 @@ export const EN: Record<string, string> = {
   "项目文件中的源图数据已损坏": "The source image data in the project file is corrupted",
   "没有读取项目文件的权限": "No permission to read the project file",
   "项目文件没有写入权限": "No permission to write the project file",
+  "AI 运行设备": "AI device",
+  "线稿 / 抠图推理使用的设备与 Provider": "Device and provider used for line art / matting inference",
+  "GPU 需安装 onnxruntime-gpu（CUDA）或 onnxruntime-directml，并用环境变量 PIXELFORGE_DEVICE=auto|cuda|dml|cpu 指定；不可用时自动回退 CPU。": "For GPU inference install onnxruntime-gpu (CUDA) or onnxruntime-directml and set PIXELFORGE_DEVICE=auto|cuda|dml|cpu; it falls back to CPU automatically.",
 };

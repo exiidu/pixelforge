@@ -185,8 +185,10 @@ function filterRows(query: string): void {
 async function refreshEngineStatus(): Promise<void> {
   const status = $<HTMLElement>("set-engine-status");
   const models = $<HTMLElement>("set-model-status");
+  const device = $<HTMLElement>("set-ai-device");
   if (status) status.textContent = "检测中…";
   if (models) models.textContent = "—";
+  if (device) device.textContent = "—";
   try {
     const res = await fetch("/api/health", { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -195,6 +197,7 @@ async function refreshEngineStatus(): Promise<void> {
       version?: string;
       jobs_cached?: number;
       models?: Record<string, boolean>;
+      ai_device?: { requested?: string; active?: string; fallback?: string | null; onnxruntime?: string | null };
     };
     if (status) status.textContent = `${h.status ?? "ok"} · v${h.version ?? "?"} · ${h.jobs_cached ?? 0} jobs`;
     const m = h.models ?? {};
@@ -205,9 +208,23 @@ async function refreshEngineStatus(): Promise<void> {
         `U2NetP ${m.matting_u2netp ? "✓" : "✗"}`,
       ].join(" · ");
     }
+    const d = h.ai_device;
+    if (device) {
+      if (!d) {
+        device.textContent = "—";
+      } else {
+        const label = d.active === "cuda" ? "CUDA"
+          : d.active === "dml" ? "DirectML" : "CPU";
+        device.textContent = `${label}${d.onnxruntime ? ` · ORT ${d.onnxruntime}` : ""}`;
+        device.title = d.fallback
+          ? `${d.fallback}（PIXELFORGE_DEVICE=${d.requested ?? "auto"}）`
+          : `PIXELFORGE_DEVICE=${d.requested ?? "auto"}`;
+      }
+    }
   } catch {
     if (status) status.textContent = "离线";
     if (models) models.textContent = "—";
+    if (device) device.textContent = "—";
   }
 }
 

@@ -23,7 +23,7 @@ PixelForge 是一个本地运行的图片转像素画引擎 + 像素编辑器。
 - **批量与导出**：文件夹批量导入、参数广播到全部标签、PNG/JPEG/WEBP、索引 PNG、
   引擎线稿、像素墨线层、精灵图集、命名模板。
 - **局部细节重算**：「细节」笔刷标记区域，只重算标记格，可撤销。
-- **可选 AI**：线稿提取（Informative Drawings）与主体抠图（U²-Net / U²-NetP），模型按需下载。
+- **可选 AI**：线稿提取（Informative Drawings）与主体抠图（U²-Net / U²-NetP），模型按需下载；可选 CUDA / DirectML GPU 推理。
 - **MCP / Agent**：19 个工具覆盖转换、批量、配方、像素编辑、填充、调色板、局部重算与导出；
   编辑器提供 Agent 控制蒙版、功能权限与 WebSocket 实时同步。
 - **产品化体验**：全局设置中心、中英双语界面、帮助中心、首次启动引导、内置示例项目。
@@ -71,6 +71,19 @@ cd pixelforge/web && npm run dev
 ```
 
 打开 `http://localhost:5173`。首次启动会引导选择语言，并可一键打开内置示例项目。
+
+## 性能与 GPU
+
+转换管线 S0–S5 默认使用 CPU；0.4.0 起 AI 线稿/抠图可选择 GPU：
+
+- **CUDA（NVIDIA）**：`pip install -e "pixelforge[gpu]"`（或 `pip install onnxruntime-gpu`），需匹配的 CUDA / cuDNN；RTX 50 系列（sm_120）需要 CUDA 12.8+ 与对应版本。
+- **DirectML（Windows，任意 GPU）**：`pip install -e "pixelforge[directml]"`。
+- **设备选择**：环境变量 `PIXELFORGE_DEVICE=auto|cuda|dml|cpu`，默认 `auto`（CUDA → DirectML → CPU）；不可用时自动回退。
+- 设置 → 引擎 →「AI 运行设备」可查看实际设备、ORT 版本与回退原因。
+
+不要同时安装 `onnxruntime` 与 GPU 版（导入名相同，二者只能保留一个）。
+
+本机 CPU 实测（2048×1536 输入，photo 配方）：512 格整条管线约 **1.8s**（0.3.0 约 7.4s），其中 S2 约 1.0s、S3 约 0.6s；64 格约 0.8s。GPU 主要加速 AI 推理（线稿 CPU 约 3s，GPU 通常百毫秒级）。
 
 ## MCP 接入
 
@@ -140,7 +153,7 @@ pixelforge/                 仓库根
 
 - 界面支持简体中文 / English；其他语言未提供。
 - 快捷键目前为固定映射，尚不支持自定义。
-- 引擎默认 CPU；GPU 推理未接入。
+- 引擎默认 CPU；GPU 加速目前覆盖 ONNX 推理（CUDA / DirectML），S0–S5 仍为 CPU（大网格已做稀疏与分块优化）。
 - 项目文件为单文档快照；多文档工程与安装包仍在路线图（A5 / E）中。
 
 ## 许可
@@ -175,7 +188,7 @@ An MCP server exposes the engine and editor to AI agents through standard tools.
 
 - Windows 10/11 (primary target; engine and web are cross-platform)
 - Python 3.11+, Node.js 20+ (Vite 6; CI uses Node 20)
-- Optional: `onnxruntime` plus model weights for AI features
+- Optional: `onnxruntime` plus model weights for AI features; CUDA or DirectML GPU inference is also supported
 
 ### Quick start
 
@@ -199,6 +212,10 @@ cd pixelforge/web && npm run dev
 ```
 
 Open http://localhost:5173.
+
+For GPU inference install `pixelforge[gpu]` (CUDA) or `pixelforge[directml]`, then set
+`PIXELFORGE_DEVICE=auto|cuda|dml|cpu`. Do not install `onnxruntime` and its GPU variant side by side.
+The engine reports the active device under Settings → Engine.
 
 ### MCP
 

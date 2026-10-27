@@ -1,8 +1,9 @@
-"""U2Net 主体抠图 Provider（ONNX，CPU，rembg 同款权重与预处理）。
+"""U2Net 主体抠图 Provider（ONNX；CPU / CUDA / DirectML，rembg 同款权重与预处理）。
 
 模型: models/matting/u2net.onnx（默认）或 u2netp.onnx（轻量快速档）
 预处理: 直接拉伸到 320×320 + ImageNet 均值方差归一化（与 rembg 一致）
 输出: 7 个深度监督输出取 out[0] 作显著性，min-max 归一化后放大回原尺寸。
+设备由 `engine.ai.runtime` 按 PIXELFORGE_DEVICE / 可用 EP 选择（0.4.0）。
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
+from engine.ai.runtime import create_session
 from engine.types import GrayMap, RGBImage
 
 MODELS_DIR = Path(__file__).resolve().parents[2] / "models" / "matting"
@@ -36,6 +38,7 @@ class U2NetMattingProvider:
         self.input_size = input_size
         self._session = None
         self._input_name = ""
+        self.providers: list[str] = []
 
     @property
     def available(self) -> bool:
@@ -47,11 +50,8 @@ class U2NetMattingProvider:
                 raise FileNotFoundError(
                     f"抠图模型不存在: {self._model_path}（下载源见 models/README.md）"
                 )
-            import onnxruntime as ort
-
-            self._session = ort.InferenceSession(
-                str(self._model_path), providers=["CPUExecutionProvider"]
-            )
+            self._session = create_session(self._model_path)
+            self.providers = list(self._session.get_providers())
             self._input_name = self._session.get_inputs()[0].name
         return self._session
 

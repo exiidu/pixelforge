@@ -93,3 +93,14 @@ def test_seed_colors_respect_max_colors_and_builtin_ignores_them():
     })
     pal2 = s3_quantize.run(_img(4), builtin_recipe)[1]
     assert pal2.source == "builtin" and len(pal2.colors) == 4
+
+
+def test_pairwise_sqdist_matches_broadcast():
+    """0.4.0：矩阵乘展开的距离必须与逐元素广播结果一致。"""
+    from engine.core.palette import _pairwise_sqdist
+
+    rng = np.random.default_rng(5)
+    a = rng.random((37, 3)).astype(np.float32)
+    b = rng.random((11, 3)).astype(np.float32)
+    ref = ((a[:, None, :] - b[None, :, :]) ** 2).sum(-1)
+    assert np.allclose(_pairwise_sqdist(a, b), ref, atol=1e-5)

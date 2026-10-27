@@ -46,5 +46,9 @@ pixelforge/models/
 
 ## 运行依赖
 
-- `onnxruntime`（CPU EP）：`pip install onnxruntime`
+- CPU：`pip install onnxruntime`
+- CUDA（NVIDIA）：`pip install onnxruntime-gpu`，并安装匹配的 CUDA / cuDNN；RTX 50 系列（sm_120）需要 CUDA 12.8+。
+- DirectML（Windows，任意 GPU）：`pip install onnxruntime-directml`
+- 设备选择：`PIXELFORGE_DEVICE=auto|cuda|dml|cpu`（默认 auto：CUDA → DirectML → CPU，不可用自动回退）。
+- `onnxruntime` 与 GPU 版共用导入名，**只能保留一个**（安装 GPU 版前先 `pip uninstall onnxruntime`）。
 - ComfyUI 重绘档：仓库仅保留 Provider 接口占位，默认不连接。

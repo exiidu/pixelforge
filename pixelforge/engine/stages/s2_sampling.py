@@ -28,6 +28,69 @@ _TOP_K = 4                 # 参与合并/软赢家的候选桶数
 _BLEND_DELTA = 0.25        # 软赢家生效的色距上限（OKLab ΔE）
 
 
+def _top_candidates_dense(
+    mapping: GridMapping, bucket: np.ndarray, w: np.ndarray, lin: np.ndarray, n_cells: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """稠密版（0.3.0 原实现）：小网格下最快，且与旧输出逐位一致。"""
+    key = mapping.cell_index.astype(np.int64) * _N_BUCKETS + bucket
+    wsum = np.bincount(key, weights=w, minlength=n_cells * _N_BUCKETS).astype(
+        np.float32
+    ).reshape(n_cells, _N_BUCKETS)
+    csum = np.stack(
+        [np.bincount(key, weights=w * lin[:, c], minlength=n_cells * _N_BUCKETS)
+         .astype(np.float32).reshape(n_cells, _N_BUCKETS) for c in range(3)],
+        axis=2,
+    )  # (n_cells, N, 3) 线性
+    top_idx = np.argsort(-wsum, axis=1)[:, :_TOP_K]
+    return (
+        np.take_along_axis(wsum, top_idx, 1),
+        np.take_along_axis(csum, top_idx[:, :, None], 1),
+    )
+
+
+def _top_candidates_sparse(
+    mapping: GridMapping, bucket: np.ndarray, w: np.ndarray, lin: np.ndarray, n_cells: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """稀疏版（0.4.0）：只在“实际出现的桶”上聚合。
+
+    旧实现按 `格数 × 512 桶` 建稠密矩阵，512 格时是 1.3 亿项（~500MB）且对每格
+    512 列做 argsort。512 格时每格只落十几到几十个源像素，稀疏表小两个数量级。
+    """
+    key = mapping.cell_index.astype(np.int64) * _N_BUCKETS + bucket
+    uniq, inv = np.unique(key, return_inverse=True)
+    wsum = np.bincount(inv, weights=w, minlength=len(uniq)).astype(np.float32)
+    csum = np.stack(
+        [np.bincount(inv, weights=w * lin[:, c], minlength=len(uniq)).astype(np.float32)
+         for c in range(3)],
+        axis=1,
+    )  # (U, 3) 线性
+
+    cells = (uniq // _N_BUCKETS).astype(np.int64)
+    counts = np.bincount(cells, minlength=n_cells)
+    # 按格分组后组内按票数降序（lexsort 主键是最后一个）
+    order = np.lexsort((-wsum, cells))
+    starts = np.zeros(n_cells, dtype=np.int64)
+    np.cumsum(counts[:-1], out=starts[1:])
+    rank = np.arange(len(order), dtype=np.int64) - starts[cells[order]]
+    keep = rank < _TOP_K
+
+    top_w = np.zeros((n_cells, _TOP_K), dtype=np.float32)
+    top_c = np.zeros((n_cells, _TOP_K, 3), dtype=np.float32)
+    chosen = order[keep]
+    top_w[cells[chosen], rank[keep]] = wsum[chosen]
+    top_c[cells[chosen], rank[keep]] = csum[chosen]
+    return top_w, top_c
+
+
+def _top_candidates(
+    mapping: GridMapping, bucket: np.ndarray, w: np.ndarray, lin: np.ndarray, n_cells: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """小网格走稠密（快且与旧版逐位一致）；大网格走稀疏（省内存/时间）。"""
+    if n_cells * _N_BUCKETS <= 8_388_608:  # 128×128 以内
+        return _top_candidates_dense(mapping, bucket, w, lin, n_cells)
+    return _top_candidates_sparse(mapping, bucket, w, lin, n_cells)
+
+
 def sample_mean(image: RGBImage, mapping: GridMapping) -> RGBImage:
     th, tw = mapping.grid_shape
     n_cells = th * tw
@@ -86,20 +149,8 @@ def sample_weighted_mode(
          + (flat[:, 1] >> _BUCKET_SHIFT).astype(np.int64)) * _BUCKETS_PER_CH
         + (flat[:, 2] >> _BUCKET_SHIFT).astype(np.int64)
     )
-    key = mapping.cell_index.astype(np.int64) * _N_BUCKETS + bucket
-    wsum = np.bincount(key, weights=w, minlength=n_cells * _N_BUCKETS).astype(
-        np.float32
-    ).reshape(n_cells, _N_BUCKETS)
-    csum = np.stack(
-        [np.bincount(key, weights=w * lin[:, c], minlength=n_cells * _N_BUCKETS)
-         .astype(np.float32).reshape(n_cells, _N_BUCKETS) for c in range(3)],
-        axis=2,
-    )  # (n_cells, N, 3) 线性
+    top_w, top_c = _top_candidates(mapping, bucket, w, lin, n_cells)
 
-    # 每格 Top-K 候选（按票数降序）
-    top_idx = np.argsort(-wsum, axis=1)[:, :_TOP_K]
-    top_w = np.take_along_axis(wsum, top_idx, 1)               # (cells, K)
-    top_c = np.take_along_axis(csum, top_idx[:, :, None], 1)   # (cells, K, 3)
     reps = top_c / np.maximum(top_w, 1e-9)[:, :, None]         # 各候选代表色（线性）
 
     # 簇合并（贪心）：Top-4 候选中 ΔE < merge_delta 的互相并入——

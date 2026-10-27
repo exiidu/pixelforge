@@ -2174,7 +2174,13 @@ document.addEventListener("keydown", (e) => {
 
 /* ---------------------------------------------------------------- 引擎状态 */
 health()
-  .then((h) => ($("engine-status").textContent = `引擎 ${h.status} · 模型 ${Object.values(h.models).filter(Boolean).length}/3`))
+  .then((h) => {
+    const dev = h.ai_device?.active;
+    const label = dev === "cuda" ? "CUDA" : dev === "dml" ? "DirectML" : dev === "cpu" ? "CPU" : "";
+    const models = Object.values(h.models).filter(Boolean).length;
+    $("engine-status").textContent =
+      `引擎 ${h.status} · 模型 ${models}/3${label ? ` · ${label}` : ""}`;
+  })
   .catch(() => ($("engine-status").textContent = "引擎离线（start_engine.bat）"));
 
 /* ---------------------------------------------------------------- 会话自动保存/恢复（M3） */

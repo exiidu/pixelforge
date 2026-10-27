@@ -459,8 +459,13 @@
             <div class="pf-set-meta"><b>AI 模型</b><span>线稿与主体抠图模型是否就位</span></div>
             <span class="pf-val" id="set-model-status">—</span>
           </div>
+          <div class="pf-set-row" data-search="ai 设备 device gpu cuda directml cpu 推理">
+            <div class="pf-set-meta"><b>AI 运行设备</b><span>线稿 / 抠图推理使用的设备与 Provider</span></div>
+            <span class="pf-val" id="set-ai-device">—</span>
+          </div>
           <div class="pf-set-actions"><button type="button" class="pf-btn" id="set-engine-refresh">刷新状态</button></div>
           <p class="pf-mute">模型权重不随仓库分发；下载方式见 models/README.md。</p>
+          <p class="pf-mute">GPU 需安装 onnxruntime-gpu（CUDA）或 onnxruntime-directml，并用环境变量 PIXELFORGE_DEVICE=auto|cuda|dml|cpu 指定；不可用时自动回退 CPU。</p>
         </section>
 
         <section data-pane="mcp" hidden>

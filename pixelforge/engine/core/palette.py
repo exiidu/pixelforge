@@ -46,29 +46,52 @@ def extract_from_image(image: RGBImage, max_colors: int) -> Palette:
     golden 验证时观察，必要时加约束。
     """
     flat = image.reshape(-1, 3)
-    uniq = np.unique(flat, axis=0)
+    # 0.4.0：按 24 位整数去重，替代 np.unique(axis=0) 的逐行排序（大网格快数倍）；
+    # 排序仍按 RGB 字典序，k-means 初始化顺序与旧实现一致。
+    packed = (
+        (flat[:, 0].astype(np.uint32) << 16)
+        | (flat[:, 1].astype(np.uint32) << 8)
+        | flat[:, 2].astype(np.uint32)
+    )
+    _, first = np.unique(packed, return_index=True)
+    uniq = flat[first]
     k = min(max_colors, len(uniq))
     if k >= len(uniq):
         return Palette(colors=uniq.astype(np.uint8), name=f"extract-{k}", source="extract")
 
-    labs = rgb_to_oklab(uniq)
+    labs = rgb_to_oklab(uniq).reshape(len(uniq), 3)
     stride = len(uniq) / k
     cent = np.stack([labs[min(int(i * stride), len(uniq) - 1)] for i in range(k)])
     for _ in range(8):
-        d = ((labs[:, None, :] - cent[None, :, :]) ** 2).sum(-1)
-        assign = d.argmin(1)
-        for ci in range(k):
-            members = labs[assign == ci]
-            if len(members):
-                cent[ci] = members.mean(0)
+        assign = _pairwise_sqdist(labs, cent).argmin(1)
+        counts = np.bincount(assign, minlength=k)
+        sums = np.stack(
+            [np.bincount(assign, weights=labs[:, c], minlength=k) for c in range(3)], axis=1
+        )
+        filled = counts > 0
+        cent[filled] = sums[filled] / counts[filled, None]
     lin = np.clip(oklab_to_linear_rgb(cent), 0.0, 1.0)
     colors = linear_to_srgb(lin)
     return Palette(colors=colors, name=f"extract-{k}", source="extract")
 
 
+def _pairwise_sqdist(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """(N,3) × (M,3) → (N,M) 平方距离。
+
+    0.4.0：用矩阵乘展开 ||a−b||² = |a|² + |b|² − 2a·b，避免旧实现的
+    (N,M,3) 临时数组（512 格 / 128 色时可达数百 MB），并走 BLAS。
+    """
+    a2 = (a * a).sum(1)
+    b2 = (b * b).sum(1)
+    return np.maximum(a2[:, None] + b2[None, :] - 2.0 * (a @ b.T), 0.0)
+
+
 def nearest_palette_index(small_rgb: RGBImage, palette: Palette) -> np.ndarray:
     """(h,w,3) sRGB → (h,w) int32 最近调色板索引，色距用 OKLab。"""
     labs = rgb_to_oklab(small_rgb).reshape(-1, 3)
-    plabs = rgb_to_oklab(palette.colors)
-    d = ((labs[:, None, :] - plabs[None, :, :]) ** 2).sum(-1)
-    return d.argmin(1).reshape(small_rgb.shape[:2]).astype(np.int32)
+    plabs = rgb_to_oklab(palette.colors).reshape(-1, 3)
+    out = np.empty(len(labs), dtype=np.int32)
+    chunk = 32768  # 分块限制峰值内存（大网格 + 128 色）
+    for start in range(0, len(labs), chunk):
+        out[start:start + chunk] = _pairwise_sqdist(labs[start:start + chunk], plabs).argmin(1)
+    return out.reshape(small_rgb.shape[:2])

@@ -2,6 +2,21 @@
 
 本项目遵循语义化版本；日期为发布日。
 
+## 0.4.0 — 2026-10-27
+
+### Added
+- AI 推理 GPU 加速：线稿与主体抠图按 `PIXELFORGE_DEVICE`（`auto|cuda|dml|cpu`）选择 CUDA / DirectML / CPU，不可用时自动回退。
+- 设置 → 引擎新增「AI 运行设备」；`/api/health` 返回实际设备、可用 Provider 与回退原因。
+- 可选安装项 `gpu`（onnxruntime-gpu）与 `directml`（onnxruntime-directml）。
+
+### Performance
+- S2 加权采样改为“小网格稠密 / 大网格稀疏”混合直方图：512 格由 ~5.4s 降至 ~1.0s，内存从 ~500MB 级降到几十 MB。
+- S3 调色板提取与最近色映射改用 BLAS 距离 + 分块计算，并加速唯一色提取；512 格由 ~2.6s 降至 ~0.6s。
+- 2048×1536 输入、512 格的整条管线由 ~7.4s 降至 ~1.8s（本机 CPU 实测）；64/128 格的输出与 0.3.0 逐位一致。
+
+### Documentation
+- README 增加 GPU 安装与性能说明；models/README 补充 CUDA / DirectML 运行依赖。
+
 ## 0.3.0 — 2026-10-27
 
 ### Added

@@ -91,6 +91,7 @@ const DYN: DynRule[] = [
   [/^第 (\d+) \/ (\d+) 步$/, "Step $1 of $2"],
   [/^已标记 (\d+) 格（Alt 擦除）；重算只写回标记格，可撤销。$/, "Marked $1 cells (Alt erases); recompute writes only marked cells, undoable."],
   [/^按色抠除 (\d+) 格$/, "Removed $1 cells by color"],
+  [/^引擎 (.+) · 模型 (\d+)\/3 · (CUDA|DirectML|CPU)$/, "Engine $1 · models $2/3 · $3"],
   [/^引擎 (.+) · 模型 (\d+)\/3$/, "Engine $1 · models $2/3"],
   [/^引擎 (.+): (.*)$/, "Engine $1: $2"],
   [/^线稿 ([✓✗])$/, "Line art $1"],

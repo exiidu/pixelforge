@@ -72,10 +72,21 @@ export async function convertPath(
   return res.json();
 }
 
+/** 0.4.0：AI 推理设备与 Provider 状态。 */
+export interface AiDeviceInfo {
+  requested: string;
+  active: "cpu" | "cuda" | "dml" | string;
+  providers: string[];
+  available: string[];
+  onnxruntime: string | null;
+  fallback: string | null;
+}
+
 export async function health(): Promise<{
   status: string;
   presets: string[];
   models: Record<string, boolean>;
+  ai_device?: AiDeviceInfo;
 }> {
   const res = await ensureOk(await fetch("/api/health"));
   return res.json();
