@@ -16,6 +16,8 @@ import { mountSettings, getSettings, openSettings } from "./settings";
 import { mountHelp } from "./help";
 import { mountOnboarding } from "./onboarding";
 import { openSampleProject } from "./sample";
+import { mountDialogs, confirmDialog } from "./dialogs";
+import { getLocale, t } from "./i18n";
 import { putSource, getSource, clearSources } from "./source-store";
 import { bucketFill, flipSelection, finishMove, copySelectionToOffset, paintCells, pixelPerfectLine, brushTipCells,
   shapeCells, shapePreviewApply, shapePreviewEnd, magneticSnap, polygonCells,
@@ -23,6 +25,8 @@ import { bucketFill, flipSelection, finishMove, copySelectionToOffset, paintCell
   extractSelectionToLayer, deleteLayer, scopeHas, commitBasePatch, magicAlphaErase,
   setPaletteColor, setPaletteBaseWithRemap } from "./tools";
 import { rgbToHex, transformPalette, ZERO_PALETTE_FX, type PaletteFx } from "./color";
+
+declare const __APP_VERSION__: string;
 
 /** 两格间的 Bresenham 线（磁力套索路径插值）。 */
 function plainLineBetween(a: [number, number], b: [number, number]): Array<[number, number]> {
@@ -423,6 +427,7 @@ function recipeOverrides(r: import("./store").RecipeParams): Record<string, unkn
 async function reconvertDocLineart(doc: EditorDoc): Promise<void> {
   if (!doc.src) {
     setStatus(`${doc.name} · 无源图，无法提取线稿`);
+    if (doc === activeDoc()) void offerRelocateSource(doc);
     return;
   }
   if (converting) return;
@@ -486,6 +491,7 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
   }
   if (!doc.src) {
     setStatus(`${doc.name} · 无源图（会话恢复的上传文件），无法重转换`);
+    if (doc === activeDoc()) void offerRelocateSource(doc);
     return;
   }
   if (converting) return;
@@ -2212,6 +2218,8 @@ interface SessionDocV1 {
   srcPath?: string;
   srcKey?: string; // M5.2：IndexedDB 里的上传源文件引用（恢复后仍可重转换）
   dirty?: boolean;
+  projectName?: string;
+  projectSavedAt?: number;
   detailMask?: string; // M4：细节标记位图（Uint8 → base64，1=标记）
 }
 interface SessionPayload {
@@ -2295,6 +2303,8 @@ function serializeDoc(doc: EditorDoc, includeSource: boolean): SessionDocV1 {
     srcPath: doc.src?.path,
     srcKey: doc.src?.key,
     dirty: doc.dirty,
+    projectName: doc.projectName,
+    projectSavedAt: doc.projectSavedAt,
     detailMask: doc.detailMask?.size ? maskToB64(doc.detailMask, doc.w * doc.h) : undefined,
   };
 }
@@ -2395,9 +2405,10 @@ function restoredRecipe(preset: string, saved: Partial<RecipeParams> | undefined
   return r;
 }
 
-async function restoreDoc(sd: SessionDocV1): Promise<void> {
+async function restoreDoc(sd: SessionDocV1, sourceOverride?: File): Promise<EditorDoc> {
   let src: EditorDoc["src"];
-  if (sd.srcPath) src = { path: sd.srcPath };
+  if (sourceOverride) src = { file: sourceOverride, key: sd.srcKey };
+  else if (sd.srcPath) src = { path: sd.srcPath };
   else if (sd.srcKey) {
     const f = await getSource(sd.srcKey);
     if (f) src = { file: f, key: sd.srcKey };
@@ -2430,7 +2441,9 @@ async function restoreDoc(sd: SessionDocV1): Promise<void> {
       src,
     });
     doc.dirty = sd.dirty ?? false;
-    return;
+    doc.projectName = sd.projectName;
+    doc.projectSavedAt = sd.projectSavedAt;
+    return doc;
   }
   const layers: PFLayer[] = sd.layers.map((sl) => {
     const layer = mkLayer(sl.name, sl.kind);
@@ -2472,6 +2485,9 @@ async function restoreDoc(sd: SessionDocV1): Promise<void> {
     detailMask: sd.detailMask ? b64ToMask(sd.detailMask, n) : undefined,
   });
   doc.dirty = sd.dirty ?? false;
+  doc.projectName = sd.projectName;
+  doc.projectSavedAt = sd.projectSavedAt;
+  return doc;
 }
 
 async function restoreSession(s: SessionPayload): Promise<void> {
@@ -2496,6 +2512,385 @@ async function restoreSession(s: SessionPayload): Promise<void> {
   invalidateBitmaps(activeDoc() ?? docs[0]);
   redrawCanvas();
   setStatus(`已恢复 ${docs.length} 个文档`);
+}
+
+/* ------------------------------------------------ 0.3.0 项目文件（.pixelforge） */
+
+/** 项目文件：单个文档的完整快照 + 内嵌源图（保存后可换机器继续编辑）。 */
+interface ProjectFileV1 {
+  type: "pixelforge-project";
+  version: 1;
+  appVersion: string;
+  createdAt: number;
+  updatedAt: number;
+  doc: SessionDocV1;
+  source?: { name: string; mime: string; data: string }; // base64（无 data: 前缀）
+  sourcePath?: string;
+  ui?: { zoom?: number; showGrid?: boolean; underlay?: number };
+}
+
+/** File System Access 的最小类型（浏览器支持不一，缺省回退下载/文件选择）。 */
+interface FsWritable { write(data: Blob | string): Promise<void>; close(): Promise<void> }
+interface FsFileHandle {
+  name: string;
+  getFile(): Promise<File>;
+  createWritable(): Promise<FsWritable>;
+  queryPermission?(opts: { mode: "read" | "readwrite" }): Promise<PermissionState>;
+  requestPermission?(opts: { mode: "read" | "readwrite" }): Promise<PermissionState>;
+}
+type SaveFilePicker = (opts?: {
+  suggestedName?: string;
+  types?: Array<{ description?: string; accept: Record<string, string[]> }>;
+}) => Promise<FsFileHandle>;
+
+interface RecentProject {
+  id: string; // 文件名小写：同一文件视为同一项目
+  name: string;
+  docName: string;
+  w: number;
+  h: number;
+  savedAt: number;
+}
+
+const RECENT_KEY = "pf.projects.v1";
+const RECENT_MAX = 12;
+/** 文件句柄只能存活于本会话（浏览器不允许跨刷新持久化），刷新后需重新选择文件。 */
+const projectHandles = new Map<string, FsFileHandle>();
+let relocateDoc: EditorDoc | null = null;
+
+function recentIdOf(name: string): string {
+  return name.toLowerCase();
+}
+
+function safeFileName(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "untitled";
+}
+
+function projectFileName(doc: EditorDoc): string {
+  const base = (doc.projectName ?? doc.name).replace(/\.pixelforge$/i, "");
+  return `${safeFileName(base)}.pixelforge`;
+}
+
+async function fileToB64(file: File): Promise<string> {
+  return u8ToB64(new Uint8Array(await file.arrayBuffer()));
+}
+
+function b64ToFile(src: { name: string; mime: string; data: string }): File {
+  const bin = atob(src.data);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new File([u8], src.name || "source.png", { type: src.mime || "image/png" });
+}
+
+function loadRecent(): RecentProject[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((r): r is RecentProject =>
+      !!r && typeof r.id === "string" && typeof r.name === "string"
+      && typeof r.docName === "string" && typeof r.savedAt === "number"
+      && typeof r.w === "number" && typeof r.h === "number");
+  } catch {
+    return [];
+  }
+}
+
+function saveRecent(list: RecentProject[]): void {
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX))); }
+  catch { /* 配额满时忽略（最近列表不是关键数据） */ }
+}
+
+function addRecent(entry: RecentProject): void {
+  const list = loadRecent().filter((r) => r.id !== entry.id);
+  list.unshift(entry);
+  saveRecent(list);
+}
+
+function removeRecent(id: string): void {
+  projectHandles.delete(id);
+  saveRecent(loadRecent().filter((r) => r.id !== id));
+}
+
+function renderRecent(): void {
+  const list = $("recent-projects");
+  list.textContent = "";
+  const recent = loadRecent();
+  if (!recent.length) {
+    const hint = document.createElement("p");
+    hint.className = "pf-project-empty";
+    hint.textContent = "还没有保存过项目。保存后会出现在这里。";
+    list.appendChild(hint);
+    return;
+  }
+  for (const r of recent) {
+    const row = document.createElement("div");
+    row.className = "pf-project";
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    const name = document.createElement("span");
+    name.className = "pf-project-name";
+    name.textContent = r.name;
+    const meta = document.createElement("span");
+    meta.className = "pf-project-meta";
+    meta.textContent = `${r.docName} · ${r.w}×${r.h} · ${new Date(r.savedAt).toLocaleDateString()}`;
+    const del = document.createElement("button");
+    del.className = "pf-ly-del";
+    del.textContent = "×";
+    del.title = "从最近项目中移除";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeRecent(r.id);
+      renderRecent();
+    });
+    row.append(name, meta, del);
+    const open = () => { void openRecentProject(r); };
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    });
+    list.appendChild(row);
+  }
+}
+
+async function buildProjectFile(doc: EditorDoc): Promise<ProjectFileV1> {
+  const srcFile = doc.src?.file;
+  const now = Date.now();
+  return {
+    type: "pixelforge-project",
+    version: 1,
+    appVersion: __APP_VERSION__,
+    createdAt: doc.projectSavedAt ?? now,
+    updatedAt: now,
+    doc: serializeDoc(doc, true),
+    source: srcFile
+      ? { name: srcFile.name, mime: srcFile.type || "image/png", data: await fileToB64(srcFile) }
+      : undefined,
+    sourcePath: doc.src?.path,
+    ui: { zoom: getState().zoom, showGrid: getState().showGrid, underlay: getState().underlay },
+  };
+}
+
+/** 文件句柄权限：已授予返回 true；未授予时尝试请求（需用户手势）。 */
+async function handlePermission(handle: FsFileHandle, mode: "read" | "readwrite"): Promise<boolean> {
+  try {
+    if (handle.queryPermission && (await handle.queryPermission({ mode })) === "granted") return true;
+    if (handle.requestPermission) return (await handle.requestPermission({ mode })) === "granted";
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+async function writeProject(handle: FsFileHandle, text: string): Promise<void> {
+  const writable = await handle.createWritable();
+  await writable.write(new Blob([text], { type: "application/json" }));
+  await writable.close();
+}
+
+/** 保存当前文档：优先原位写入（File System Access），否则下载文件。 */
+async function saveProject(asNew = false): Promise<void> {
+  const doc = activeDoc();
+  if (!doc) { setStatus("没有打开的文档"); return; }
+  let payload: ProjectFileV1;
+  try {
+    payload = await buildProjectFile(doc);
+  } catch (err) {
+    setStatus(`读取源图失败: ${(err as Error).message}`);
+    return;
+  }
+  const text = JSON.stringify(payload) + "\n";
+  const picker = (window as unknown as { showSaveFilePicker?: SaveFilePicker }).showSaveFilePicker;
+  let handle = asNew || !doc.projectName ? null : projectHandles.get(recentIdOf(doc.projectName)) ?? null;
+  if (!handle && picker) {
+    try {
+      handle = await picker({
+        suggestedName: projectFileName(doc),
+        types: [{ description: "PixelForge project", accept: { "application/json": [".pixelforge"] } }],
+      });
+    } catch (err) {
+      if ((err as DOMException).name === "AbortError") return; // 用户取消
+      console.warn("项目另存为弹窗不可用，回退下载", err);
+    }
+  }
+  let savedName: string;
+  try {
+    if (handle) {
+      if (!(await handlePermission(handle, "readwrite"))) {
+        setStatus("项目文件没有写入权限");
+        return;
+      }
+      await writeProject(handle, text);
+      savedName = handle.name;
+    } else {
+      savedName = projectFileName(doc);
+      downloadText(savedName, text);
+    }
+  } catch (err) {
+    setStatus(`保存失败: ${(err as Error).message}`);
+    return;
+  }
+  doc.projectName = savedName;
+  doc.projectSavedAt = Date.now();
+  doc.dirty = false;
+  if (handle) projectHandles.set(recentIdOf(savedName), handle);
+  addRecent({
+    id: recentIdOf(savedName), name: savedName, docName: doc.name,
+    w: doc.w, h: doc.h, savedAt: doc.projectSavedAt,
+  });
+  updateDoc(doc, {});
+  renderRecent();
+  setStatus(`已保存项目 ${savedName}`);
+}
+
+/** 结构校验：坏文件直接拒绝，避免把非法尺寸/色板灌进编辑器。 */
+function validProjectDoc(doc: SessionDocV1): boolean {
+  if (!doc || typeof doc !== "object") return false;
+  const w = Number(doc.w), h = Number(doc.h);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1 || w > 4096 || h > 4096) return false;
+  if (w * h > 4_000_000) return false;
+  if (doc.lineart) return typeof doc.lineart.url === "string";
+  return Array.isArray(doc.layers) && Array.isArray(doc.palette) && typeof doc.fill === "string";
+}
+
+async function openProjectFile(file: File, handle?: FsFileHandle): Promise<void> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    setStatus("项目文件不是合法 JSON");
+    return;
+  }
+  const pf = parsed as Partial<ProjectFileV1>;
+  if (!pf || pf.type !== "pixelforge-project" || pf.version !== 1 || !pf.doc || !validProjectDoc(pf.doc)) {
+    setStatus("不是有效的 PixelForge 项目文件");
+    return;
+  }
+  let source: File | undefined;
+  try {
+    source = pf.source?.data ? b64ToFile(pf.source) : undefined;
+  } catch {
+    setStatus("项目文件中的源图数据已损坏");
+    return;
+  }
+  try {
+    const doc = await restoreDoc(pf.doc, source);
+    doc.projectName = file.name;
+    doc.projectSavedAt = pf.updatedAt ?? Date.now();
+    doc.dirty = false;
+    if (source) await persistSource(doc, source);
+    const id = recentIdOf(file.name);
+    if (handle) projectHandles.set(id, handle);
+    addRecent({ id, name: file.name, docName: doc.name, w: doc.w, h: doc.h, savedAt: doc.projectSavedAt });
+    renderRecent();
+    const ui = pf.ui;
+    setState({
+      zoom: doc.lineart
+        ? Math.max(0.05, Math.min(8, ui?.zoom ?? fitZoomForLineart(doc.w, doc.h)))
+        : Math.max(1, Math.min(24, ui?.zoom ?? fitZoomFor(doc.w, doc.h))),
+      showGrid: ui?.showGrid ?? getState().showGrid,
+      underlay: ui?.underlay ?? getState().underlay,
+    });
+    $("grid").setAttribute("aria-pressed", String(getState().showGrid));
+    ($("underlay") as HTMLInputElement).value = String(getState().underlay);
+    invalidateBitmaps(doc);
+    redrawCanvas();
+    setStatus(`已打开项目 ${file.name} · ${doc.name}`);
+    if (!doc.blank && !doc.src) void offerRelocateSource(doc);
+  } catch (err) {
+    setStatus(`打开项目失败: ${(err as Error).message}`);
+  }
+}
+
+async function openRecentProject(r: RecentProject): Promise<void> {
+  const handle = projectHandles.get(r.id);
+  if (handle) {
+    if (!(await handlePermission(handle, "read"))) {
+      setStatus("没有读取项目文件的权限");
+      return;
+    }
+    try {
+      await openProjectFile(await handle.getFile(), handle);
+      return;
+    } catch (err) {
+      setStatus(`打开项目失败: ${(err as Error).message}`);
+      return;
+    }
+  }
+  ($("projectsdlg") as HTMLDialogElement).close();
+  setStatus(`请选择项目文件「${r.name}」`);
+  ($("project-input") as HTMLInputElement).click();
+}
+
+/** 项目/会话恢复的文档缺少源图时，提示重新绑定（可重转换、可导出引擎线稿）。 */
+async function offerRelocateSource(doc: EditorDoc): Promise<void> {
+  if (!doc || doc.blank || doc.src) return;
+  const en = getLocale() === "en-US";
+  const ok = await confirmDialog({
+    title: t("缺少源图"),
+    message: en
+      ? `“${doc.name}” has no source image, so it cannot be reconverted or export engine line art. Choose the source image now?`
+      : `「${doc.name}」缺少源图，无法重转换或导出引擎线稿。现在选择源图吗？`,
+    okText: t("选择源图…"),
+    cancelText: t("取消"),
+  });
+  if (!ok) return;
+  relocateDoc = doc;
+  ($("source-input") as HTMLInputElement).click();
+}
+
+function mountProjects(): void {
+  const dlg = $("projectsdlg") as HTMLDialogElement;
+  $("projects-btn").addEventListener("click", () => { renderRecent(); dlg.showModal(); });
+  $("project-save").addEventListener("click", () => void saveProject(false));
+  $("proj-close").addEventListener("click", () => dlg.close());
+  $("proj-saveas").addEventListener("click", () => { dlg.close(); void saveProject(true); });
+  $("proj-browse").addEventListener("click", () => {
+    dlg.close();
+    ($("project-input") as HTMLInputElement).click();
+  });
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+
+  ($("project-input") as HTMLInputElement).addEventListener("change", (e) => {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (file) void openProjectFile(file);
+  });
+
+  ($("source-input") as HTMLInputElement).addEventListener("change", async (e) => {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    const doc = relocateDoc ?? activeDoc();
+    relocateDoc = null;
+    if (!file || !doc) return;
+    doc.src = { file };
+    await persistSource(doc, file);
+    updateDoc(doc, {}); // 刷新标签/图层/面板
+    setStatus(`已重新绑定源图 ${file.name} · 可重新转换`);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    const key = e.key.toLowerCase();
+    if (key === "s") {
+      e.preventDefault();
+      void saveProject(e.shiftKey);
+    } else if (key === "o") {
+      e.preventDefault();
+      ($("project-input") as HTMLInputElement).click();
+    }
+  });
+
+  window.addEventListener("beforeunload", (e) => {
+    if (!getState().docs.some((d) => d.dirty)) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
+
+  renderRecent();
 }
 
 let pendingSession: SessionPayload | null = null;
@@ -2600,6 +2995,8 @@ mountColorLib($("colorlib"));
 mountSettings();
 mountHelp();
 mountOnboarding();
+mountDialogs();
+mountProjects();
 mountMcpUi({ demo: agentDemo });
 mountJobSync(applyJobUpdate);
 redrawCanvas();

@@ -64,10 +64,11 @@
 | MCP-UI（Agent 控制蒙版 + 左下角 MCP 管理窗 + Agent/功能权限；`?agentDemo=1`） | ✅ 2026-10-26 |
 | MCP-3B（`GET /api/jobs` + `WS /api/jobs/{id}` + 编辑器 job-sync；Agent 心跳/控制/权限真实接入；UI 徽章 + toast） | ✅ 2026-10-26 |
 | 设置中心 A1（主题/强调色/减少动效、默认预设/尺寸/网格、Agent 通知、MCP 管理迁入、搜索/导入导出/重置） | ✅ 2026-10-26 |
-| 双语化 A3（`web/src/i18n.ts` + `i18n-dict.ts`：383 条静态词表 + 动态文案规则；语言即时切换、持久化、切回中文还原原文） | ✅ 2026-10-26 |
+| 双语化 A3（`web/src/i18n.ts` + `i18n-dict.ts`：404 条静态词表 + 动态文案规则；语言即时切换、持久化、切回中文还原原文） | ✅ 2026-10-26 |
 | 帮助中心 A2（`help.ts` 9 分类、F1/状态栏入口、中英双语；主界面常驻指导文案迁入）+ 首次引导 `onboarding.ts`（4 步：语言优先；`?onboarding=1` 重看）+ 示例项目 `sample.ts`（程序化 32×32 像素风景） | ✅ 2026-10-26 |
 | 开源基线 P0（MIT LICENSE / THIRD_PARTY_NOTICES / 根 README 中英 / CHANGELOG / CI / CORS + 图片路径白名单 / 可移植启动脚本 / 模型下载与校验） | ✅ 2026-10-27 |
-| 后续产品化 A4–H（可访问性、项目文件、英文 README、安装包、安全、CI 等）见 `productization-roadmap.md` | ⬜ |
+| 项目文件 0.3.0（`.pixelforge` 单文档快照 + 内嵌源图；原位保存/下载回退；最近项目；`Ctrl+S`/`Ctrl+Shift+S`/`Ctrl+O`；缺失源图重定位；关闭与离开确认） | ✅ 2026-10-27 |
+| 后续产品化 A4–H（可访问性、多文档工程、安装包、安全、CI 等）见 `productization-roadmap.md` | ⬜ |
 
 ## 5. 架构关键决策（改代码前必读）
 
@@ -96,15 +97,16 @@
 
 | 文件 | 职责 |
 |---|---|
-| `main.ts` | 装配入口；指针绘制状态机（14 工具分支，含「细节」掩码与「抠背景」alpha 笔刷）；快捷键；参数面板+防抖重转换；细节重算（重试/前缀校验/BasePatch）；批量导入/导出（命名模板/图集/索引 PNG/引擎线稿）；色板 .hex/.gpl 导入导出；配方 JSON 导入导出；色板变换；描图底图；会话自动保存/恢复（含 alpha 位图）；标签右键菜单事件；`__pf` 调试句柄（DEV：composeStats/alphaStats/layerSummary） |
+| `main.ts` | 装配入口；指针绘制状态机（14 工具分支，含「细节」掩码与「抠背景」alpha 笔刷）；快捷键；参数面板+防抖重转换；细节重算（重试/前缀校验/BasePatch）；批量导入/导出（命名模板/图集/索引 PNG/引擎线稿）；色板 .hex/.gpl 导入导出；配方 JSON；色板变换；描图底图；会话自动保存/恢复；`.pixelforge` 项目保存/打开/最近项目（File System Access 原位写入 + 下载回退）、源图重定位、未保存离开确认；标签右键菜单事件；`__pf` 调试句柄（DEV：composeStats/alphaStats/layerSummary） |
+| `dialogs.ts` | 0.3.0 通用 Promise 确认框（`confirmDialog` / `confirmDiscard`）：Esc、背景点击取消；未保存关闭确认复用 |
 | `source-store.ts` | M5.2：上传源文件存 IndexedDB（SHA-256 key + LRU 淘汰 200）——会话恢复后仍可重转换/出引擎线稿 |
 | `mcp-ui.ts` | MCP-UI：Agent 控制蒙版（全屏遮罩/快捷键锁/解除控制）、左下角 MCP 入口、Agent 列表与功能权限（localStorage + `/api/agents` 轮询 + `pf:agent-control` 事件；`?agentDemo=1` 验收） |
 | `job-sync.ts` | MCP-3B：按文档 jobId 订阅 `WS /api/jobs/{id}`，断线重连；`main.ts::applyJobUpdate` 应用服务端 base（保留手改层、刷新背景层/缓存，显示 Agent 徽章与 toast） |
 | `settings.ts` | A1 全局设置中心：主题/强调色/减少动效、默认预设/尺寸/网格、Agent 通知、引擎状态、MCP 管理入口、搜索/导入导出/重置；localStorage `pf.settings.v1` |
 | `i18n.ts` | A3 双语化：静态词表 + 动态文案正则，运行时遍历 DOM 翻译（含 title/placeholder/aria-label），WeakMap 记录原文支持切回中文；MutationObserver 补译运行期新增文本 |
-| `i18n-dict.ts` | A3 静态文案中→英词表（383 条，键为 DOM 中的完整文本） |
+| `i18n-dict.ts` | A3 静态文案中→英词表（404 条，键为 DOM 中的完整文本） |
 | `help.ts` | A2 帮助中心：9 个分类的中英双语正文数据，F1/状态栏/空状态入口，语言切换时整体重渲染 |
-| `onboarding.ts` | A2 首次启动三步引导：首次且无文档时自动弹出，完成/跳过写 `pf.onboarding.v1`，`?onboarding=1` 强制重看 |
+| `onboarding.ts` | A2 首次启动四步引导（语言优先）：首次且无文档时自动弹出，完成/跳过写 `pf.onboarding.v1`，`?onboarding=1` 强制重看 |
 | `sample.ts` | A2 示例项目：程序化绘制 32×32 像素风景（8 色板），空白画布文档，重复打开不新增标签 |
 | `store.ts` | AppState（docs/activeIndex/zoom/tool/selection/brushSize/customColors/paletteSort/applyAll/underlay/detailLevel）+ pub/sub；EditorDoc 含 layers/recipe/presetName/paletteBase/paletteFx/alpha/detailMask；HistEntry = steps + layerFx + base + palette；moveDoc/closeDocsToRight/closeOtherDocs |
 | `tools.ts` | 笔画缓冲（一笔一条历史）、pixel-perfect 线、形状三件套+实时预览、泛洪、磁力套索吸附/多边形填充、移动（选区/当前层）、翻转、撤销重做、scopeHas/scopeCells、ensureDocColor、抠背景（paintAlphaCells/magicAlphaErase）、色板历史（commitPalette/setPaletteColor/setPaletteBase） |

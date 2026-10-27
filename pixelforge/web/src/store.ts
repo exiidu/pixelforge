@@ -141,6 +141,9 @@ export interface EditorDoc {
   /** 重转换用源；空 = 新建画布。key = IndexedDB 里的源文件引用（会话恢复用）。 */
   src?: { file?: File; path?: string; key?: string };
   blank?: boolean; // true = 纯手绘画布（无源图，不参与转换）
+  /** 0.3.0：最近一次保存的项目文件名与时间（用于原位保存与未保存判断）。 */
+  projectName?: string;
+  projectSavedAt?: number;
   /** M4：细节重算标记（网格格号；仅当前文档，重算成功后清空）。 */
   detailMask?: Set<number>;
   history: { undo: HistEntry[]; redo: HistEntry[] };

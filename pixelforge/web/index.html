@@ -12,8 +12,12 @@
       <button id="new" class="pf-btn">新建画布…</button>
       <button id="open" class="pf-btn primary">打开图片…</button>
       <button id="open-folder" class="pf-btn">打开文件夹…</button>
+      <button id="projects-btn" class="pf-btn" title="打开项目 / 最近项目">项目…</button>
+      <button id="project-save" class="pf-btn" title="保存当前文档为 .pixelforge（Ctrl+S）">保存</button>
       <input id="file-input" type="file" accept="image/*" multiple hidden />
       <input id="folder-input" type="file" webkitdirectory multiple hidden />
+      <input id="project-input" type="file" accept=".pixelforge,application/json" hidden />
+      <input id="source-input" type="file" accept="image/*" hidden />
       <div class="pf-spacer"></div>
       <span id="engine-status" class="pf-val"></span>
       <button id="export" class="pf-btn">导出</button>
@@ -42,6 +46,30 @@
         <div class="pf-dlg-btns">
           <button type="button" class="pf-btn" id="restore-no">忽略并清空</button>
           <button type="button" class="pf-btn primary" id="restore-yes">恢复</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="projectsdlg" class="pf-dlg pf-projects">
+      <div class="pf-dlg-body">
+        <h3>项目</h3>
+        <p class="pf-mute">项目文件（.pixelforge）包含当前文档、配方、图层、手改与源图；保存后可从最近项目继续。</p>
+        <div class="pf-project-list" id="recent-projects"></div>
+        <div class="pf-dlg-btns">
+          <button type="button" class="pf-btn" id="proj-saveas">另存当前文档…</button>
+          <button type="button" class="pf-btn" id="proj-browse">浏览项目文件…</button>
+          <button type="button" class="pf-btn primary" id="proj-close">关闭</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="confirmdlg" class="pf-dlg pf-confirm">
+      <div class="pf-dlg-body">
+        <h3 id="confirm-title">确认</h3>
+        <p class="pf-confirm-text" id="confirm-message"></p>
+        <div class="pf-dlg-btns">
+          <button type="button" class="pf-btn" id="confirm-cancel">取消</button>
+          <button type="button" class="pf-btn primary" id="confirm-ok">确定</button>
         </div>
       </div>
     </dialog>

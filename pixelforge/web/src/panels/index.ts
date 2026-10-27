@@ -6,6 +6,39 @@ import { closeDoc, closeDocsToRight, closeOtherDocs, getState, moveDoc, setActiv
 import { jumpHistory } from "../tools";
 import { ICONS } from "../icons";
 import { rgb2hsl, gammaLum, hsv2rgb, hexToRgb, rgbToHex } from "../color";
+import { confirmDiscard } from "../dialogs";
+
+/** 关闭标签：有未保存手改时先确认（0.3.0）。 */
+async function closeTabWithConfirm(index: number): Promise<void> {
+  const doc = getState().docs[index];
+  if (!doc) return;
+  if (doc.dirty && !(await confirmDiscard([doc.name]))) return;
+  closeDoc(index);
+}
+
+async function closeOthersWithConfirm(index: number): Promise<void> {
+  const { docs } = getState();
+  if (index < 0 || index >= docs.length || docs.length <= 1) {
+    document.dispatchEvent(new CustomEvent("pf:status", { detail: "没有可关闭的其他标签" }));
+    return;
+  }
+  const dirty = docs.filter((d, i) => i !== index && d.dirty).map((d) => d.name);
+  if (dirty.length && !(await confirmDiscard(dirty))) return;
+  const n = closeOtherDocs(index);
+  document.dispatchEvent(new CustomEvent("pf:status", { detail: n ? `已关闭其他 ${n} 个标签` : "没有可关闭的其他标签" }));
+}
+
+async function closeRightWithConfirm(index: number): Promise<void> {
+  const { docs } = getState();
+  if (index < 0 || index >= docs.length - 1) {
+    document.dispatchEvent(new CustomEvent("pf:status", { detail: "右侧没有标签" }));
+    return;
+  }
+  const dirty = docs.slice(index + 1).filter((d) => d.dirty).map((d) => d.name);
+  if (dirty.length && !(await confirmDiscard(dirty))) return;
+  const n = closeDocsToRight(index);
+  document.dispatchEvent(new CustomEvent("pf:status", { detail: n ? `已关闭右侧 ${n} 个标签` : "右侧没有标签" }));
+}
 
 /** 标签右键菜单（M5-6）：复制配方到全部 / 导出此文档 / 关闭其他 / 关闭右侧。 */
 function showTabMenu(x: number, y: number, index: number): void {
@@ -18,14 +51,8 @@ function showTabMenu(x: number, y: number, index: number): void {
   const items: Array<[string, () => void]> = [
     ["复制配方到全部标签", () => document.dispatchEvent(new CustomEvent("pf:recipes-to-all", { detail: index }))],
     ["导出此文档…", () => document.dispatchEvent(new CustomEvent("pf:export-doc", { detail: index }))],
-    ["关闭其他标签", () => {
-      const n = closeOtherDocs(index);
-      document.dispatchEvent(new CustomEvent("pf:status", { detail: n ? `已关闭其他 ${n} 个标签` : "没有可关闭的其他标签" }));
-    }],
-    ["关闭右侧标签", () => {
-      const n = closeDocsToRight(index);
-      document.dispatchEvent(new CustomEvent("pf:status", { detail: n ? `已关闭右侧 ${n} 个标签` : "右侧没有标签" }));
-    }],
+    ["关闭其他标签", () => void closeOthersWithConfirm(index)],
+    ["关闭右侧标签", () => void closeRightWithConfirm(index)],
   ];
   for (const [label, fn] of items) {
     const b = document.createElement("button");
@@ -74,12 +101,12 @@ export function mountTabs(container: HTMLElement): void {
       close.setAttribute("aria-label", `关闭 ${doc.name}`);
       close.addEventListener("click", (e) => {
         e.stopPropagation();
-        closeDoc(i);
+        void closeTabWithConfirm(i);
       });
       tab.append(dot, label, close);
       tab.addEventListener("click", () => setActive(i));
       tab.addEventListener("auxclick", (e) => {
-        if (e.button === 1) closeDoc(i); // 中键关闭
+        if (e.button === 1) void closeTabWithConfirm(i); // 中键关闭
       });
       tab.addEventListener("contextmenu", (e) => {
         e.preventDefault();

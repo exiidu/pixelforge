@@ -264,6 +264,21 @@ details.pf-card > summary.pf-card-h:hover { color: var(--pf-text, inherit) }
 .pf-dlg-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px }
 .pf-dlg::backdrop { background: rgba(0,0,0,.35) }
 
+/* 0.3.0 项目文件与确认框 */
+.pf-projects { width: min(560px, 92vw) }
+.pf-project-list { display: flex; flex-direction: column; gap: 5px; margin: 12px 0 2px;
+  max-height: 300px; overflow-y: auto }
+.pf-project-empty { color: var(--pf-dim); font-size: 12px; padding: 8px 2px }
+.pf-project { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  font: inherit; color: inherit; background: var(--pf-panel2); border: 1px solid var(--pf-border);
+  border-radius: 9px; padding: 8px 10px; cursor: pointer }
+.pf-project:hover { border-color: var(--pf-accent) }
+.pf-project-name { flex: 1; min-width: 0; font-size: 12px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.pf-project-meta { flex: none; font-size: 11px; color: var(--pf-dim) }
+.pf-confirm { width: min(420px, 92vw) }
+.pf-confirm-text { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--pf-dim) }
+
 /* MCP / Agent 入口与管理窗 */
 .pf-mcp-entry { gap: 7px; padding-left: 9px; }
 .pf-mcp-entry .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pf-dim); flex: none }
