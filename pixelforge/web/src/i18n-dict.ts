@@ -430,4 +430,8 @@ export const EN: Record<string, string> = {
   "高对比度": "High contrast",
   "加强文字、边框与焦点环对比，便于低视力使用": "Stronger text, border, and focus-ring contrast for low vision",
   "转换进度": "Conversion progress",
+  "最近操作": "Recent actions",
+  "刷新": "Refresh",
+  "暂无 Agent 操作记录。": "No recent Agent actions.",
+  "审计日志不可用（引擎离线）。": "Audit log unavailable (engine offline).",
 };

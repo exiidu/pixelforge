@@ -239,6 +239,50 @@ async function refreshEngineStatus(): Promise<void> {
   }
 }
 
+async function refreshAudit(): Promise<void> {
+  const list = $<HTMLElement>("set-audit-list");
+  const empty = $<HTMLElement>("set-audit-empty");
+  if (!list) return;
+  list.textContent = "";
+  try {
+    const res = await fetch("/api/agents/audit?limit=30", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json() as {
+      entries?: Array<{ ts: number; agent_id: string; action: string; status: number }>;
+    };
+    const entries = data.entries ?? [];
+    if (!entries.length) {
+      if (empty) empty.hidden = false;
+      return;
+    }
+    if (empty) empty.hidden = true;
+    for (const e of entries) {
+      const row = document.createElement("div");
+      row.className = "pf-audit-row";
+      const time = document.createElement("span");
+      time.className = "pf-audit-time";
+      time.textContent = new Date(e.ts * 1000).toLocaleTimeString();
+      const agent = document.createElement("span");
+      agent.className = "pf-audit-agent";
+      agent.textContent = e.agent_id;
+      const action = document.createElement("span");
+      action.className = "pf-audit-path";
+      action.textContent = e.action;
+      action.title = e.action;
+      const status = document.createElement("span");
+      status.className = "pf-audit-status" + (e.status >= 400 ? " err" : "");
+      status.textContent = String(e.status);
+      row.append(time, agent, action, status);
+      list.appendChild(row);
+    }
+  } catch {
+    if (empty) {
+      empty.hidden = false;
+      empty.textContent = "审计日志不可用（引擎离线）。";
+    }
+  }
+}
+
 export function openSettings(tab = "general"): void {
   const dlg = $<HTMLDialogElement>("settingsdlg");
   if (!dlg) return;
@@ -252,6 +296,7 @@ export function openSettings(tab = "general"): void {
   syncControls();
   if (!dlg.open) dlg.showModal();
   if (tab === "engine") void refreshEngineStatus();
+  if (tab === "mcp") void refreshAudit();
 }
 
 export function getSettings(): AppSettings {
@@ -334,6 +379,7 @@ export function mountSettings(): void {
       filterRows("");
       showTab(tab);
       if (tab === "engine") void refreshEngineStatus();
+      if (tab === "mcp") void refreshAudit();
     });
   }
 
@@ -380,6 +426,7 @@ export function mountSettings(): void {
   }
 
   $("set-engine-refresh")?.addEventListener("click", () => void refreshEngineStatus());
+  $("set-audit-refresh")?.addEventListener("click", () => void refreshAudit());
   $("set-export")?.addEventListener("click", exportSettings);
   $("set-import")?.addEventListener("click", () => $<HTMLInputElement>("set-import-file")?.click());
   $<HTMLInputElement>("set-import-file")?.addEventListener("change", (event) => {

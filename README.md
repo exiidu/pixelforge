@@ -112,6 +112,7 @@ cd pixelforge/web && npm run dev
   `PIXELFORGE_CORS_ORIGINS` 追加。
 - 通过路径读取图片时默认只允许用户主目录与仓库目录；可用
   `PIXELFORGE_ALLOWED_ROOTS`（`os.pathsep` 分隔）扩展。编辑器上传图片不受此限制。
+- Agent 写操作带审计记录（时间、Agent、方法+路径、状态码），可在设置 → MCP / Agent 查看；会话保存上限 8MB。
 - 模型权重不随仓库分发；下载与校验见 `pixelforge/models/README.md`。
 
 ## 开发与测试
@@ -119,7 +120,7 @@ cd pixelforge/web && npm run dev
 以下命令均从仓库根目录执行：
 
 ```bash
-# 后端测试（当前 101 个用例）
+# 后端测试（当前 120 个用例）
 cd pixelforge && python -m pytest -q
 
 # 前端类型检查与构建

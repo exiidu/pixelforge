@@ -33,12 +33,13 @@ import os
 import threading
 import time
 import uuid
+from collections import deque
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
@@ -58,7 +59,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="PixelForge Engine", version="0.6.0", lifespan=_lifespan)
+app = FastAPI(title="PixelForge Engine", version="0.7.0", lifespan=_lifespan)
 
 
 def _cors_origins() -> list[str]:
@@ -101,6 +102,37 @@ _LOOP: asyncio.AbstractEventLoop | None = None
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / ".cache" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 SESSION_PATH = Path(__file__).resolve().parents[2] / "web" / "session.json"
+SESSION_MAX_BYTES = 8_000_000  # 0.7.0：会话上限，拒绝超大 JSON 写入
+
+# 0.7.0：Agent 操作审计（仅记录带 X-PixelForge-Agent 的写请求）
+_AUDIT_MAX = 200
+_AUDIT: deque[dict] = deque(maxlen=_AUDIT_MAX)
+_AUDIT_SKIP = {"/api/agents/audit", "/api/agents/register", "/api/agents/control", "/api/session"}
+
+
+def _record_audit(agent_id: str, method: str, path: str, status: int) -> None:
+    _AUDIT.append({
+        "ts": time.time(),
+        "agent_id": agent_id,
+        "action": f"{method} {path}",
+        "status": int(status),
+    })
+
+
+@app.middleware("http")
+async def _audit_agent_requests(request: Request, call_next):
+    agent_id = (request.headers.get("x-pixelforge-agent") or "").strip()[:80]
+    path = request.url.path
+    record = (
+        bool(agent_id)
+        and request.method in ("POST", "PUT", "PATCH", "DELETE")
+        and path.startswith("/api/")
+        and path not in _AUDIT_SKIP
+    )
+    response = await call_next(request)
+    if record:
+        _record_audit(agent_id, request.method, path, response.status_code)
+    return response
 
 
 class ConvertRequest(BaseModel):
@@ -471,6 +503,7 @@ def _agent_view(agent: dict) -> dict:
 
 
 def _agent_or_create(agent_id: str) -> dict:
+    agent_id = str(agent_id)[:80]  # 0.7.0：限制标识长度
     agent = _AGENTS.get(agent_id)
     if agent is None:
         agent = {
@@ -650,7 +683,8 @@ def jobs_list():
 def _clean_features(raw: dict | None) -> dict:
     if not isinstance(raw, dict):
         return {}
-    return {str(k): bool(v) for k, v in raw.items()}
+    # 0.7.0：限制条目数，避免 Agent 写入超大权限表
+    return {str(k)[:40]: bool(v) for k, v in list(raw.items())[:64]}
 
 
 @app.get("/api/agents")
@@ -661,8 +695,8 @@ def agents_list():
 @app.post("/api/agents/register")
 def agent_register(req: AgentRegisterRequest):
     agent = _agent_or_create(req.id)
-    agent["name"] = req.name or req.id
-    agent["subtitle"] = req.subtitle
+    agent["name"] = (req.name or req.id)[:80]
+    agent["subtitle"] = (req.subtitle or "")[:120]
     agent["last_seen"] = time.time()
     if req.features is not None:
         agent["features"] = _clean_features(req.features)
@@ -691,6 +725,15 @@ def agent_features(req: AgentFeaturesRequest):
     return _agent_view(agent)
 
 
+@app.get("/api/agents/audit")
+def agents_audit(limit: int = 50):
+    """0.7.0：最近 Agent 写操作（只记录带 X-PixelForge-Agent 的请求）。"""
+    n = max(1, min(_AUDIT_MAX, int(limit)))
+    entries = list(_AUDIT)[-n:]
+    entries.reverse()
+    return {"count": len(_AUDIT), "entries": entries}
+
+
 @app.post("/api/convert")
 def convert(req: ConvertRequest):
     image, alpha = _load_image_rgba(req.image_path)
@@ -716,7 +759,8 @@ async def convert_file(
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"上传图片无法解析: {e}") from e
     ov = json.loads(overrides) if overrides else None
-    dest = UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{Path(file.filename or 'img').name}"
+    filename = Path(file.filename or "img").name[:80]  # 0.7.0：限制文件名长度
+    dest = UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{filename}"
     dest.write_bytes(raw)
     # 0.6.0：转换是 CPU 密集任务，放到线程池，避免批量上传时阻塞健康检查与 WS。
     return await run_in_threadpool(
@@ -957,9 +1001,12 @@ def session_load():
 @app.post("/api/session")
 def session_save(req: SessionRequest):
     """原子写入会话文件（含 fill/ink/覆盖表；编辑器每 30s 自动调用）。"""
+    payload = json.dumps(req.data, ensure_ascii=False)
+    if len(payload.encode("utf-8")) > SESSION_MAX_BYTES:
+        raise HTTPException(413, "会话超过 8MB 上限，已拒绝写入")
     SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = SESSION_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(req.data, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(payload, encoding="utf-8")
     tmp.replace(SESSION_PATH)
     return {"ok": True, "bytes": SESSION_PATH.stat().st_size}
 
