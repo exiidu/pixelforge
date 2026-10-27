@@ -3,6 +3,8 @@
 import { setState } from "./store";
 import { setLocale } from "./i18n";
 
+declare const __APP_VERSION__: string;
+
 export type ThemeMode = "system" | "light" | "dark";
 export type AccentColor = "green" | "blue" | "amber";
 export type DefaultPreset = "photo" | "illustration" | "lineart";
@@ -274,6 +276,8 @@ export function mountSettings(): void {
 
   applyAppearance();
   syncControls();
+  const version = $("about-version");
+  if (version) version.textContent = __APP_VERSION__;
 
   $("settings-btn")?.addEventListener("click", () => openSettings("general"));
   $("mcp-manager")?.addEventListener("click", () => openSettings("mcp"));
