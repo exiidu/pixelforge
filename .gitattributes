@@ -1,0 +1,4 @@
+# Windows 批处理必须以 CRLF 检出，否则 cmd 解析 goto/标签会异常（窗口一闪而过）。
+*.bat text eol=crlf
+# Shell 脚本保持 LF。
+*.sh text eol=lf

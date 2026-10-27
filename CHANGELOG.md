@@ -2,6 +2,11 @@
 
 本项目遵循语义化版本；日期为发布日。
 
+## 0.4.1 — 2026-10-27
+
+### Fixed
+- Windows 启动脚本 `start_all.bat` / `start_engine.bat` 以 LF 行尾保存时，`cmd` 解析 `goto`/标签失败，双击后窗口一闪而过。已改为 CRLF，并新增 `.gitattributes` 固定检出行为。
+
 ## 0.4.0 — 2026-10-27
 
 ### Added
