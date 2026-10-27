@@ -35,32 +35,31 @@ PixelForge 是一个本地运行的图片转像素画引擎 + 像素编辑器。
 ## 快速开始
 
 ```bash
-git clone <repo-url> pixelforge
-cd pixelforge
-python -m pip install -e "pixelforge[ai,mcp,dev]"
-cd pixelforge/web && npm install && cd ../..
+git clone https://github.com/exiidu/pixelforge.git
+cd pixelforge                      # 仓库根目录（内含同名的 pixelforge/ 包目录）
+python -m pip install -e "pixelforge[ai,mcp,dev]"   # 安装引擎包
+(cd pixelforge/web && npm install)                  # 安装前端依赖
 ```
 
-下载可选模型（不下载也能用非 AI 功能）：
+下载可选模型（不下载也能用非 AI 功能，需在仓库根目录执行）：
 
 ```bash
-cd pixelforge
-python tools/download_models.py
+python pixelforge/tools/download_models.py
 ```
 
-启动：
+启动（仓库根目录）：
 
 ```bat
 start_all.bat
 ```
 
 脚本会自动启动引擎（`127.0.0.1:8700`）与前端（`localhost:5173`）并打开浏览器。
-手动启动：
+手动启动（在仓库根目录执行）：
 
 ```bash
 cd pixelforge
 python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700
-# 另开终端
+# 另开终端，仍在仓库根目录
 cd pixelforge/web && npm run dev
 ```
 
@@ -171,19 +170,19 @@ An MCP server exposes the engine and editor to AI agents through standard tools.
 ### Quick start
 
 ```bash
-git clone <repo-url> pixelforge
-cd pixelforge
+git clone https://github.com/exiidu/pixelforge.git
+cd pixelforge                      # repo root (contains the pixelforge/ package)
 python -m pip install -e "pixelforge[ai,mcp,dev]"
-cd pixelforge/web && npm install && cd ../..
-cd pixelforge && python tools/download_models.py   # optional AI models
+(cd pixelforge/web && npm install)
+python pixelforge/tools/download_models.py   # optional AI models
 ```
 
-Then run `start_all.bat`, or start manually:
+Then run `start_all.bat` from the repo root, or start manually (also from the repo root):
 
 ```bash
-cd pixelforge
-python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700
-cd web && npm run dev
+cd pixelforge && python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700
+# in another terminal, still at the repo root:
+cd pixelforge/web && npm run dev
 ```
 
 Open http://localhost:5173.
