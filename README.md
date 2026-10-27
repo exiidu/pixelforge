@@ -1,5 +1,7 @@
 # PixelForge
 
+[![CI](https://github.com/exiidu/pixelforge/actions/workflows/ci.yml/badge.svg)](https://github.com/exiidu/pixelforge/actions/workflows/ci.yml)
+
 **把任意图片转成分层、可编辑、索引色的像素画，并直接在里面继续画。**
 
 PixelForge 是一个本地运行的图片转像素画引擎 + 像素编辑器。转换是确定性管线，
@@ -15,7 +17,7 @@ PixelForge 是一个本地运行的图片转像素画引擎 + 像素编辑器。
 - **确定性转换管线**：S0 预处理 → S1 结构/线稿 → S2 加权众数采样 → S3 OKLab 调色板量化 →
   S4 墨线合成 → S5 后处理；同一源图与配方可复现。
 - **分层输出**：底色层 Fill、墨线层 Ink、调色板；支持索引 PNG（PLTE + tRNS）、真透明与主体分离。
-- **像素编辑器**：多文档标签、14 种工具、逻辑图层栈、撤销/重做、选区、笔刷/对称、
+- **像素编辑器**：多文档标签、13 种工具、逻辑图层栈、撤销/重做、选区、笔刷/对称、
   调色板排序与锁定、色板 OKLab 变换、描图底图、会话自动恢复。
 - **批量与导出**：文件夹批量导入、参数广播到全部标签、PNG/JPEG/WEBP、索引 PNG、
   引擎线稿、像素墨线层、精灵图集、命名模板。
@@ -29,7 +31,7 @@ PixelForge 是一个本地运行的图片转像素画引擎 + 像素编辑器。
 
 - Windows 10/11（当前主要在 Windows 验证；引擎与前端本身跨平台）
 - Python 3.11+
-- Node.js 18+
+- Node.js 20+（Vite 6；CI 使用 Node 20）
 - 可选：`onnxruntime` 与模型权重（AI 线稿/抠图）
 
 ## 快速开始
@@ -38,7 +40,9 @@ PixelForge 是一个本地运行的图片转像素画引擎 + 像素编辑器。
 git clone https://github.com/exiidu/pixelforge.git
 cd pixelforge                      # 仓库根目录（内含同名的 pixelforge/ 包目录）
 python -m pip install -e "pixelforge[ai,mcp,dev]"   # 安装引擎包
-(cd pixelforge/web && npm install)                  # 安装前端依赖
+cd pixelforge/web
+npm install
+cd ../..                            # 回到仓库根目录
 ```
 
 下载可选模型（不下载也能用非 AI 功能，需在仓库根目录执行）：
@@ -52,6 +56,8 @@ python pixelforge/tools/download_models.py
 ```bat
 start_all.bat
 ```
+
+macOS / Linux 使用 `bash start_all.sh`。
 
 脚本会自动启动引擎（`127.0.0.1:8700`）与前端（`localhost:5173`）并打开浏览器。
 手动启动（在仓库根目录执行）：
@@ -81,7 +87,8 @@ cd pixelforge/web && npm run dev
 }
 ```
 
-先用上面的方式启动引擎。工具列表与参数说明见 `mcp-design.md`。
+`<repo>` 替换为仓库的绝对路径（Windows 示例：`D:/path/to/pixelforge`）。先用上面的方式启动引擎。
+工具列表与参数说明见 `mcp-design.md`。
 
 ## 安全与隐私
 
@@ -94,8 +101,10 @@ cd pixelforge/web && npm run dev
 
 ## 开发与测试
 
+以下命令均从仓库根目录执行：
+
 ```bash
-# 后端测试
+# 后端测试（当前 101 个用例）
 cd pixelforge && python -m pytest -q
 
 # 前端类型检查与构建
@@ -114,7 +123,7 @@ pixelforge/                 仓库根
 │   ├── web/                Vite + TypeScript 编辑器（无 UI 框架）
 │   ├── tests/              pytest
 │   ├── models/             模型目录与下载说明（权重不入库）
-│   └── tools/              模型下载、MCP 端到端检查
+│   └── tools/              脚本：模型下载、MCP 端到端检查、测试图生成
 ├── start_all.bat           一键启动（引擎 + 前端）
 ├── start_all.sh            一键启动（macOS / Linux）
 ├── start_engine.bat        仅启动引擎
@@ -128,7 +137,7 @@ pixelforge/                 仓库根
 
 ## 已知限制
 
-- 首次启动引导与界面以简体中文/英文为主，其他语言未提供。
+- 界面支持简体中文 / English；其他语言未提供。
 - 快捷键目前为固定映射，尚不支持自定义。
 - 引擎默认 CPU；GPU 推理未接入。
 - `.pixelforge` 项目文件与安装包在路线图（A5 / E）中，尚未实现。
@@ -152,7 +161,7 @@ An MCP server exposes the engine and editor to AI agents through standard tools.
 
 - Deterministic pipeline (S0–S5) with weighted-mode sampling and OKLab palette quantization.
 - Layered output: fill, ink, palette; indexed PNG (PLTE + tRNS), true transparency and subject matting.
-- Multi-document editor with 14 tools, logical layers, undo/redo, selections, brushes, symmetry,
+- Multi-document editor with 13 tools, logical layers, undo/redo, selections, brushes, symmetry,
   palette sorting/locking, OKLab palette transforms, tracing underlay, and session restore.
 - Batch import/export, parameter broadcasting, PNG/JPEG/WEBP, indexed PNG, engine line art,
   pixel ink layer, sprite atlases, and naming templates.
@@ -164,7 +173,7 @@ An MCP server exposes the engine and editor to AI agents through standard tools.
 ### Requirements
 
 - Windows 10/11 (primary target; engine and web are cross-platform)
-- Python 3.11+, Node.js 18+
+- Python 3.11+, Node.js 20+ (Vite 6; CI uses Node 20)
 - Optional: `onnxruntime` plus model weights for AI features
 
 ### Quick start
@@ -173,11 +182,14 @@ An MCP server exposes the engine and editor to AI agents through standard tools.
 git clone https://github.com/exiidu/pixelforge.git
 cd pixelforge                      # repo root (contains the pixelforge/ package)
 python -m pip install -e "pixelforge[ai,mcp,dev]"
-(cd pixelforge/web && npm install)
+cd pixelforge/web
+npm install
+cd ../..                            # back to the repo root
 python pixelforge/tools/download_models.py   # optional AI models
 ```
 
-Then run `start_all.bat` from the repo root, or start manually (also from the repo root):
+Then run `start_all.bat` from the repo root (`bash start_all.sh` on macOS/Linux),
+or start manually (also from the repo root):
 
 ```bash
 cd pixelforge && python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700
@@ -190,7 +202,8 @@ Open http://localhost:5173.
 ### MCP
 
 Point your stdio MCP client at `<repo>/pixelforge/mcp_launcher.py` and keep the engine running
-on `127.0.0.1:8700`. See `mcp-design.md` for the tool reference.
+on `127.0.0.1:8700`. Replace `<repo>` with the absolute path to the repository
+(for example `D:/path/to/pixelforge`). See `mcp-design.md` for the tool reference.
 
 ### Security and privacy
 
