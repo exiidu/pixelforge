@@ -1,11 +1,11 @@
 [project]
 name = "pixelforge"
-version = "0.1.0"
-description = "个人用图片转像素画引擎：分层索引色输出，确定性管线 + 可选 AI 增强"
+version = "0.2.0"
+description = "图片转像素画引擎：分层索引色输出，确定性管线 + 可选 AI 增强"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
-    "scipy",
     "opencv-python",
     "pillow",
     "fastapi",
@@ -14,7 +14,8 @@ dependencies = [
 
 [project.optional-dependencies]
 ai = ["onnxruntime"]      # AI 档接入时安装（线稿/抠图模型）
-dev = ["pytest"]
+mcp = ["mcp>=2.3"]        # MCP 服务器（stdio）
+dev = ["pytest", "mcp>=2.3"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -2,6 +2,8 @@
 
 export interface ConvertResponse {
   job_id: string;
+  /** MCP-3B：服务端 job 修订号（用于 WS 更新去重）。 */
+  revision?: number;
   width: number;
   height: number;
   palette: [number, number, number][];

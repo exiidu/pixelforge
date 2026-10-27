@@ -181,6 +181,15 @@ POST /api/export_indexed {palette, indices, width, height} → 带 PLTE(+tRNS) �
 GET  /api/stage/{jobId}/{stage}   → 任一中间产物（P0/E/L/I/…），验证与调参用
 WS   /api/preview        参数变更推送实时预览
 POST /api/extract_palette {image, k} → 调色板
+GET  /api/jobs/{id}/grid          → 完整 fill/ink/alpha/调色板/revision（MCP-3A）
+POST /api/jobs/{id}/pixels        → 批量写格（fill/ink/alpha）
+POST /api/jobs/{id}/fill          → 区域泛洪填充
+POST /api/jobs/{id}/palette       → 整板 OKLab 变换（索引不动）
+POST /api/jobs/{id}/rerun         → 局部重算（rect/cells）
+POST /api/jobs/{id}/export        → composite RGBA / indexed PLTE+tRNS
+GET  /api/jobs                    → job 列表（MCP-3B）
+WS   /api/jobs/{id}               → 快照 + 编辑广播（MCP-3B）
+GET/POST /api/agents              → Agent 注册/控制/功能权限（MCP-3B）
 ```
 
 - **增量转换**（`rerun_region`）是编辑器核心交互：用户圈一块不满意的地方 → 改该区参数 → 引擎只重算 S2–S3 的该区域写回。全图级参数改动则全量重跑（64² 网格全量也只需毫秒级，压力只在 S0/S1，而它们按图缓存）。

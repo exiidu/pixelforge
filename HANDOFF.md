@@ -1,48 +1,49 @@
 # PixelForge 交接文档（HANDOFF）
 
-> 更新：2026-10-26。写给下一个接手的 AI 会话或开发者：读这一份 + 三份设计文档即可接管全部工作。
-> 项目记忆（跨会话自动加载）：`C:\Users\AZAKA\.zcode\cli\memories\projects\draft-af9c58c9-...\memory\pixelforge-project.md`
+> 更新：2026-10-27。写给下一个接手的 AI 会话或开发者：读这一份 + 三份设计文档即可接管全部工作。
 
 ---
 
 ## 1. 项目是什么
 
-**PixelForge**：个人使用的图片→像素画转换 + 像素编辑器。仅本人服务，无商业化约束。
-根目录 **`D:\pixelforge\pixelforge`**（一切操作用 D 盘绝对路径）。
+**PixelForge**：图片→像素画转换引擎 + 像素编辑器，准备以 MIT 协议开源。
+仓库根目录为当前工作目录；下文路径均为相对路径。
 
 两大模块：
 1. **转换引擎**（Python，已完成 v1）：确定性管线把照片/插画转成分层像素画（底色层 Fill + 墨线层 Ink + 调色板），配 ONNX AI 增强（线稿/抠图）与 FastAPI 服务。
 2. **像素编辑器**（Web 前端，M1–M5 已完成）：多文档、工具集、逻辑图层、手改层、调色板体系（含导入导出/锁定/单色编辑）、参数面板、批量导入导出（含索引 PNG/配方 JSON）、局部细节重算、真透明与主体分离、会话恢复。
 
-另有 **MCP 服务器**（已挂载 ZCode，8 个工具）让 AI 直接调用引擎做视觉调参闭环。
+另有 **MCP 服务器**（已挂载 ZCode，19 个工具）让 AI 直接调用引擎做视觉调参闭环；MCP-2 已补批量转换、配方存取与 image 内容块，MCP-3A 已补服务端像素编辑，MCP-3B 已接通 Agent 注册/控制/功能权限与编辑器 job WS 实时同步。
 
 ## 2. 一键运行
 
-- **`D:\pixelforge\start_all.bat`**：双击 = 引擎(:8700) + 前端(:5173) + 就绪后自动开浏览器。
-- 手动：`cd D:\pixelforge\pixelforge && python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700`；`cd web && npm run dev`。
+- **`start_all.bat`**（仓库根）：双击 = 引擎(:8700) + 前端(:5173) + 就绪后自动开浏览器；路径相对脚本，仓库可移动。
+- 手动：`cd pixelforge && python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700`；`cd pixelforge/web && npm run dev`。
 - 编辑器：http://localhost:5173（`?demo=1` 自动开 3 张测试图，供自动化验收）。
-- 引擎单独启动脚本：`D:\pixelforge\start_engine.bat`。
-- 测试：`cd D:\pixelforge\pixelforge && python -m pytest -q`（65 个单测）。
-- 前端构建：`cd web && npx tsc --noEmit && npm run build`（dev 模式 HMR 即时生效，构建产物 dist/ 仅备查）。
+- 引擎单独启动脚本：`start_engine.bat`；macOS/Linux 可用 `start_all.sh`。
+- 测试：`cd pixelforge && python -m pytest -q`（101 个单测）。
+- 前端构建：`cd pixelforge/web && npx tsc --noEmit && npm run build`（dev 模式 HMR 即时生效，构建产物 dist/ 仅备查）。
 
 ## 3. 文档索引（按需读）
 
 | 文档 | 内容 |
 |---|---|
-| `D:\pixelforge\conversion-engine-design.md` (v0.2) | 转换引擎设计（管线/采样/墨线/配方） |
-| `D:\pixelforge\editor-design.md` (**v1.5**) | 编辑器设计 + 实施状态（M1–M4 ✓） |
-| `D:\pixelforge\mcp-design.md` | MCP 服务器设计（Phase 1 已落地） |
-| `models/README.md` | ONNX 模型来源与规格 |
+| `conversion-engine-design.md` (v0.2) | 转换引擎设计（管线/采样/墨线/配方） |
+| `editor-design.md` (**v1.12**) | 编辑器设计 + 实施状态（M1–M5、MCP-UI、MCP-3B、设置中心、双语化、帮助/引导 ✓） |
+| `mcp-design.md` | MCP 服务器设计（MCP-1/2/3A/3B 已落地） |
+| `productization-roadmap.md` | 产品化 / 发行版改进路线（A–H，v1.0 门槛） |
+| `pixelforge/models/README.md` | ONNX 模型来源、许可与 SHA-256 |
+| `README.md` / `THIRD_PARTY_NOTICES.md` / `LICENSE` | 开源门面与许可 |
 
 ## 4. 当前进度总览
 
 | 模块 | 状态 |
 |---|---|
 | 转换管线 S0–S5 + 主引擎 v1.1（加权众数：贪心簇合并/软赢家/稀有色带权重） | ✅ |
-| io_utils 统一加载（RGBA 白底合成 + ICC→sRGB；M5-0 增 `load_rgb_with_alpha`）+ 单元测试（全仓 65） | ✅ |
-| FastAPI :8700（convert/convert_file/stage/rerun_region/lineart/lineart_file/matting/palette/result_info/get_pixel/health/session/WS/**export_indexed**） | ✅ |
+| io_utils 统一加载（RGBA 白底合成 + ICC→sRGB；M5-0 增 `load_rgb_with_alpha`）+ 单元测试（全仓 94） | ✅ |
+| FastAPI :8700（convert/convert_file/stage/rerun_region/lineart/lineart_file/matting/palette/result_info/get_pixel/health/session/WS/export_indexed/jobs/**jobs grid|pixels|fill|palette|rerun|export**/**GET jobs**/**WS jobs/{id}**/**agents**） | ✅ |
 | 独立线稿提取（ONNX/XDoG，CLI `--lineart-out`） | ✅ |
-| MCP 服务器（stdio 启动器 mcp_launcher.py，ZCode 已挂载名 `pixelforge`） | ✅ Phase 1 |
+| MCP 服务器（stdio 启动器 mcp_launcher.py，ZCode 已挂载名 `pixelforge`） | ✅ MCP-1 + MCP-2 + MCP-3A + **MCP-3B（19 工具；job WS + Agent 控制/权限）** |
 | 编辑器 M1（多文档/标签/缩放/网格/对比/图层/调色板/导航器） | ✅ |
 | 编辑器 M2（手改层/工具/撤销重做/历史面板/选区/手改重转换保留） | ✅ |
 | 编辑器 M2.5（11 工具 PS 图标/磁力套索/形状/笔刷粗细/调色板排序/颜色库） | ✅ |
@@ -59,7 +60,14 @@
 | 引擎 M5.2（**非正方形素材保宽高比**：`target.preserve_aspect`，尺寸=长边） | ✅ 2026-10-26 |
 | 引擎 M5.3（`preprocess.levels.bright_contrast` 亮部对比 = **可选参数，默认 0=关**；修复 S 曲线增量 bug（曾致全局过曝/偏色）；回退无效的 E 自适应归一化与墨线密度衰减） | ✅ 2026-10-26 |
 | 引擎 v1.5（alpha 投票真透明输出） | ✅ 合并进 M5-0 |
-| MCP-2/3（批量打磨、写入工具）、ComfyUI img2img、`/api/convert_batch` | ⬜ |
+| MCP-3A（服务端像素编辑 6 接口 + 6 工具：get_grid/draw/fill/palette/rerun/export；revision 乐观锁） | ✅ 2026-10-26 |
+| MCP-UI（Agent 控制蒙版 + 左下角 MCP 管理窗 + Agent/功能权限；`?agentDemo=1`） | ✅ 2026-10-26 |
+| MCP-3B（`GET /api/jobs` + `WS /api/jobs/{id}` + 编辑器 job-sync；Agent 心跳/控制/权限真实接入；UI 徽章 + toast） | ✅ 2026-10-26 |
+| 设置中心 A1（主题/强调色/减少动效、默认预设/尺寸/网格、Agent 通知、MCP 管理迁入、搜索/导入导出/重置） | ✅ 2026-10-26 |
+| 双语化 A3（`web/src/i18n.ts` + `i18n-dict.ts`：383 条静态词表 + 动态文案规则；语言即时切换、持久化、切回中文还原原文） | ✅ 2026-10-26 |
+| 帮助中心 A2（`help.ts` 9 分类、F1/状态栏入口、中英双语；主界面常驻指导文案迁入）+ 首次引导 `onboarding.ts`（4 步：语言优先；`?onboarding=1` 重看）+ 示例项目 `sample.ts`（程序化 32×32 像素风景） | ✅ 2026-10-26 |
+| 开源基线 P0（MIT LICENSE / THIRD_PARTY_NOTICES / 根 README 中英 / CHANGELOG / CI / CORS + 图片路径白名单 / 可移植启动脚本 / 模型下载与校验） | ✅ 2026-10-27 |
+| 后续产品化 A4–H（可访问性、项目文件、英文 README、安装包、安全、CI 等）见 `productization-roadmap.md` | ⬜ |
 
 ## 5. 架构关键决策（改代码前必读）
 
@@ -90,6 +98,14 @@
 |---|---|
 | `main.ts` | 装配入口；指针绘制状态机（14 工具分支，含「细节」掩码与「抠背景」alpha 笔刷）；快捷键；参数面板+防抖重转换；细节重算（重试/前缀校验/BasePatch）；批量导入/导出（命名模板/图集/索引 PNG/引擎线稿）；色板 .hex/.gpl 导入导出；配方 JSON 导入导出；色板变换；描图底图；会话自动保存/恢复（含 alpha 位图）；标签右键菜单事件；`__pf` 调试句柄（DEV：composeStats/alphaStats/layerSummary） |
 | `source-store.ts` | M5.2：上传源文件存 IndexedDB（SHA-256 key + LRU 淘汰 200）——会话恢复后仍可重转换/出引擎线稿 |
+| `mcp-ui.ts` | MCP-UI：Agent 控制蒙版（全屏遮罩/快捷键锁/解除控制）、左下角 MCP 入口、Agent 列表与功能权限（localStorage + `/api/agents` 轮询 + `pf:agent-control` 事件；`?agentDemo=1` 验收） |
+| `job-sync.ts` | MCP-3B：按文档 jobId 订阅 `WS /api/jobs/{id}`，断线重连；`main.ts::applyJobUpdate` 应用服务端 base（保留手改层、刷新背景层/缓存，显示 Agent 徽章与 toast） |
+| `settings.ts` | A1 全局设置中心：主题/强调色/减少动效、默认预设/尺寸/网格、Agent 通知、引擎状态、MCP 管理入口、搜索/导入导出/重置；localStorage `pf.settings.v1` |
+| `i18n.ts` | A3 双语化：静态词表 + 动态文案正则，运行时遍历 DOM 翻译（含 title/placeholder/aria-label），WeakMap 记录原文支持切回中文；MutationObserver 补译运行期新增文本 |
+| `i18n-dict.ts` | A3 静态文案中→英词表（383 条，键为 DOM 中的完整文本） |
+| `help.ts` | A2 帮助中心：9 个分类的中英双语正文数据，F1/状态栏/空状态入口，语言切换时整体重渲染 |
+| `onboarding.ts` | A2 首次启动三步引导：首次且无文档时自动弹出，完成/跳过写 `pf.onboarding.v1`，`?onboarding=1` 强制重看 |
+| `sample.ts` | A2 示例项目：程序化绘制 32×32 像素风景（8 色板），空白画布文档，重复打开不新增标签 |
 | `store.ts` | AppState（docs/activeIndex/zoom/tool/selection/brushSize/customColors/paletteSort/applyAll/underlay/detailLevel）+ pub/sub；EditorDoc 含 layers/recipe/presetName/paletteBase/paletteFx/alpha/detailMask；HistEntry = steps + layerFx + base + palette；moveDoc/closeDocsToRight/closeOtherDocs |
 | `tools.ts` | 笔画缓冲（一笔一条历史）、pixel-perfect 线、形状三件套+实时预览、泛洪、磁力套索吸附/多边形填充、移动（选区/当前层）、翻转、撤销重做、scopeHas/scopeCells、ensureDocColor、抠背景（paintAlphaCells/magicAlphaErase）、色板历史（commitPalette/setPaletteColor/setPaletteBase） |
 | `render.ts` | renderView（图层栈合成/墨线叠加/网格线/选区蚂蚁线/描图底图/细节掩码橙色覆盖）、patchBitmapCells 补丁、位图缓存失效、composeIndexGrid（索引 PNG 用）、真 alpha 合成与边缘泛洪回退 |
@@ -101,10 +117,10 @@
 
 ## 7. 工程教训与坑（血泪合集，务必看）
 
-- **Mimosa 安全钩子**：Bash 写源码/配置文件会被拦——**一律用 Write/Edit 工具**；Edit 的 file_path 用**正斜杠**（`D:/pixelforge/...`），反斜杠路径易抽风。
+- **Mimosa 安全钩子**：Bash 写源码/配置文件会被拦——**一律用 Write/Edit 工具**；Edit 的 file_path 用**正斜杠**，反斜杠路径易抽风。
 - **MCP SDK 是 2.x**：`from mcp.server.mcpserver import MCPServer`（FastMCP 已改名），结果字段 `is_error`；挂载必须带 cwd 或用 `mcp_launcher.py`（自插 sys.path，cwd 无关）。
-- **CSS 陷阱**：显式 `display` 会压过 `[hidden]` 的 UA `display:none`（空状态曾常驻占半屏）——顶部已有 `[hidden]{display:none!important}` 兜底；**设计变量必须在 `:root`**（body 直属的 dialog/菜单取不到 .pf-app 上的变量 → 弹窗透明"只剩文字"）。
-- **`<dialog>`**：程序化 `requestSubmit()` 不写 returnValue——按钮交互用显式 click + close，别靠 form。
+- **CSS 陷阱**：显式 `display` 会压过 `[hidden]` 的 UA `display:none`（空状态曾常驻占半屏）——顶部已有 `[hidden]{display:none!important}` 兜底；**同一个坑也适用于 `<dialog>`**：作者样式里的 `display:flex` 会压过浏览器对关闭状态 dialog 的 `display:none`，关闭的设置窗因此留在文档流里、主界面下滑就能看到——需补 `.pf-settings:not([open]){display:none}`；**设计变量必须在 `:root`**（body 直属的 dialog/菜单取不到 .pf-app 上的变量 → 弹窗透明"只剩文字"）。
+- **`<dialog>`**：程序化 `requestSubmit()` 不写 returnValue——按钮交互用显式 click + close，别靠 form。**Esc 会被 `type="search"` 输入框吞掉**（原生只清空输入、不触发 dialog 的 cancel）——弹窗内需自己监听 keydown 处理 Escape。
 - **Pointer capture**：对合成/非活跃 pointerId `setPointerCapture` 会抛 NotFoundError——用 try/catch 包装；拖拽类交互建议 document 级 pointermove/up 监听（重渲染重建元素也不怕）。
 - **空格键**：keydown 的 `e.repeat` 必须在 preventDefault **之后**判断，否则按住空格浏览器照滚。
 - **移动工具位移**：必须从按下点屏幕像素算（downX/z），用 cellFromEvent 反推会被画布自身 transform 反噬（"拽着不走"）。
@@ -129,12 +145,16 @@ M5.1 补丁（2026-10-26）：放大网格的**黑色发丝线**已修复（`bui
 1. ~~**M4**：保细节笔刷 + rerun_region~~ ✅
 2. ~~**M5**：真透明/主体分离、索引 PNG、色板导入导出+锁定+单色编辑、配方 JSON、标签拖拽与右键菜单~~ ✅
 3. ~~**引擎 v1.5**：S2 alpha 投票真透明输出~~ ✅（以 M5-0 形式落地）
-4. **MCP-2/3**：批量打磨、写入工具（待编辑器多文档写路径 + WS 同步）
-5. **v2**：ComfyUI img2img 再生成、Bayer 抖动、分层采样、自适应网格、`convert_batch`
+4. ~~**MCP-2**：批量并发转换 + 失败清单、配方保存/读取/列表、image 内容块~~ ✅ 2026-10-26（12 工具，`tools/check_mcp.py` 全过）
+5. ~~**MCP-3A**：服务端像素编辑（get_grid/draw_pixels/fill_region/palette_transform/rerun_region/export）~~ ✅ 2026-10-26（18 工具，pytest 90 通过）
+6. ~~**MCP-3B**：job 列表 + 浏览器 WS 同步 + Agent 注册/控制/权限~~ ✅ 2026-10-26（19 工具，pytest 94 通过）
+7. **v2**：ComfyUI img2img 再生成、Bayer 抖动、分层采样、自适应网格、`convert_batch`
 
 ## 9. 已知瑕疵（低优先级）
 
 - 浅色/远景区墨线对比偏弱；跨格 2px 线偶发双宽
+- MCP-3B：Agent 对 base 的外部更新只刷新画面，暂不进编辑器撤销栈；多 Agent 同时控制同一 job 未做冲突仲裁
+- job 内存上限 128（`_MAX_JOBS`）：超出时优先淘汰无 WS 订阅的最老 job；被淘汰的 job 前端 WS 收到 1008 后停止重连
 - 重转换缩小网格时多个手改格塌到同一目标格（最近格映射，后写覆盖前写）
 - IAB 视口 <780px 侧栏隐藏（@media），窄窗口下左右面板不可见
 - 自定义色架删除无撤销（色架不入文档历史栈）

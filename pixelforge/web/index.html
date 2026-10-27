@@ -68,7 +68,7 @@
               <option value="256">256</option><option value="512">512</option>
             </select>
           </label>
-          <p class="pf-mute" id="mode-note">改动即时重转换当前文档；空白画布不受影响。</p>
+          <p class="pf-mute" id="mode-note" hidden></p>
           <label class="pf-param-row pf-allrow" title="打开后参数改动会广播到所有文档并各自重转换">
             <input type="checkbox" id="rp-all"> 应用到全部标签
           </label>
@@ -120,13 +120,12 @@
               </select>
             </label>
             <label class="pf-param-row"><input type="checkbox" id="rp-ink"> 引擎墨线</label>
-            <p class="pf-mute">滑杆 300ms 防抖重转换；空白画布不参与转换。</p>
           </details>
         </details>
 
         <details class="pf-card" id="detail-card" open>
           <summary class="pf-card-h">细节增强</summary>
-          <p class="pf-mute" id="detail-note">用「细节」笔刷（D）标出要保细节的区域；重算只写回标记格，可撤销。</p>
+          <p class="pf-mute" id="detail-note" hidden></p>
           <label class="pf-topfield">强度
             <select id="detail-level">
               <option value="0">轻</option>
@@ -173,11 +172,7 @@
             <button class="pf-tile seg" id="sym-v" title="上下镜像">V</button>
             <button class="pf-tile seg" id="sym-quad" title="四分镜像">四分</button>
           </div>
-          <p class="pf-mute">作用于「图层」面板选中的层；选区存在时绘制被限制在选区内，Esc 取消选区。快捷键：V 移动 · S 选区 · Q 套索 · B 铅笔 · E 橡皮 · G 油漆桶 · I 取色 · D 细节 · W 抠背景 · L 直线 · R 矩形 · O 椭圆 · M 对称。透明素材导入会自动在下方建「背景层」（默认隐藏），可显隐/删除还原背景。</p>
         </div>
-
-        <div class="pf-h">操作提示</div>
-        <p class="pf-mute">滚轮缩放 · 按住「对比」看源图</p>
       </aside>
 
       <main class="pf-stage">
@@ -187,8 +182,9 @@
             <div class="pf-empty-btns">
               <button class="pf-btn primary" id="empty-open">打开图片…</button>
               <button class="pf-btn" id="empty-new">新建画布…</button>
+              <button class="pf-btn" id="empty-sample">示例项目</button>
+              <button class="pf-btn" id="empty-help">使用指南</button>
             </div>
-            <div class="pf-mute">支持多选批量打开 · 空白画布不经转换引擎</div>
           </div>
         </div>
         <div class="pf-canvaswrap" id="canvaswrap" hidden>
@@ -221,7 +217,7 @@
         <div class="pf-pal" id="pal-custom"></div>
 
         <details class="pf-lib" id="palfx">
-          <summary>色板变换 <span class="pf-val" id="pfx-v">原色</span></summary>
+          <summary title="改板不改画：格子索引不动，可一键换季/夜景">色板变换 <span class="pf-val" id="pfx-v">原色</span></summary>
           <label class="pf-param">明度 <output id="pfx-light-v">0</output>
             <input type="range" id="pfx-light" min="-100" max="100" step="1" value="0">
           </label>
@@ -234,7 +230,6 @@
           <div class="pf-lib-btns">
             <button class="pf-btn" id="pfx-reset">重置</button>
           </div>
-          <p class="pf-mute">改板不改画：格子索引不动，可一键换季/夜景。</p>
         </details>
 
         <details class="pf-lib" id="colorlib">
@@ -294,14 +289,18 @@
         <div id="lineart-panels" hidden>
           <div class="pf-h">线稿文档</div>
           <p class="pf-val" id="la-dims">—</p>
-          <p class="pf-mute">源分辨率只读视图，不做像素化。滚轮缩放、按住「对比源图」查看原图；导出时输出清晰线稿 PNG。</p>
-          <p class="pf-mute">切回「照片 / 插画」预设可重新转换为像素画（手改与图层会重置）。</p>
         </div>
       </aside>
     </div>
 
     <div class="pf-status">
+      <button id="mcp-manager" class="pf-btn pf-mcp-entry" title="管理 MCP / Agent 接入">
+        <span class="dot"></span><span>MCP</span>
+      </button>
+      <button id="settings-btn" class="pf-btn" title="全局设置">设置</button>
+      <button id="help-btn" class="pf-btn" title="使用指南 (F1)">帮助</button>
       <span id="stat-doc">—</span>
+      <span id="agent-sync" class="pf-agent-sync" hidden></span>
       <div class="pf-spacer"></div>
       <button class="pf-btn" id="zoom-out" aria-label="缩小">−</button>
       <span class="pf-val mono" id="zoom-v">600%</span>
@@ -314,6 +313,255 @@
       <span class="mono" id="stat-cursor">—</span>
     </div>
   </div>
+
+  <!-- Agent 控制蒙版：MCP Agent 操作期间锁住编辑器 -->
+  <div id="agent-overlay" class="pf-agent-overlay" hidden role="alertdialog" aria-modal="true" aria-labelledby="agent-title">
+    <div class="pf-agent-card">
+      <div class="pf-agent-orb"><span></span></div>
+      <div class="pf-agent-kicker">Agent 控制中</div>
+      <h2 id="agent-title">Agent 正在控制编辑器</h2>
+      <p class="pf-agent-activity" id="agent-activity">正在执行任务…</p>
+      <p class="pf-agent-hint">为避免操作冲突，编辑器操作已暂时锁定。</p>
+      <button id="agent-release" class="pf-btn primary">解除控制</button>
+    </div>
+  </div>
+
+  <!-- 全局设置中心（含 MCP / Agent 管理） -->
+  <dialog id="settingsdlg" class="pf-settings">
+    <div class="pf-settings-head">
+      <div class="pf-settings-title">
+        <h3>设置</h3>
+        <p class="pf-mute">PixelForge · 全局设置</p>
+      </div>
+      <label class="pf-settings-search">
+        <span>搜索</span>
+        <input id="settings-search" type="search" placeholder="搜索设置…（主题 / 语言 / MCP / 快捷键）" autocomplete="off" />
+      </label>
+      <button class="pf-btn" id="settings-close">关闭</button>
+    </div>
+    <div class="pf-settings-body">
+      <nav class="pf-settings-nav" id="settings-nav" aria-label="设置分类">
+        <button type="button" data-tab="general" class="active">通用</button>
+        <button type="button" data-tab="appearance">外观</button>
+        <button type="button" data-tab="editor">编辑器</button>
+        <button type="button" data-tab="engine">转换引擎</button>
+        <button type="button" data-tab="mcp">MCP / Agent</button>
+        <button type="button" data-tab="shortcuts">快捷键</button>
+        <button type="button" data-tab="advanced">高级</button>
+        <button type="button" data-tab="about">关于</button>
+      </nav>
+      <div class="pf-settings-panes" id="settings-panes">
+        <p class="pf-mute" id="settings-no-results" hidden>没有匹配的设置。</p>
+        <section data-pane="general">
+          <div class="pf-set-row" data-search="语言 language 中文 english">
+            <div class="pf-set-meta"><b>界面语言</b><span>切换后立即生效，偏好保存在本地</span></div>
+            <select id="set-language">
+              <option value="zh-CN">简体中文</option>
+              <option value="en-US">English</option>
+            </select>
+          </div>
+          <div class="pf-set-row" data-search="通知 notification agent 更新 toast">
+            <div class="pf-set-meta"><b>Agent 更新提示</b><span>Agent 修改当前文档时显示 8 秒浮条</span></div>
+            <label class="pf-set-check"><input id="set-agent-notify" type="checkbox" /> 显示</label>
+          </div>
+          <div class="pf-set-row" data-search="会话 session 自动保存 autosave">
+            <div class="pf-set-meta"><b>自动保存</b><span>每 30 秒保存文档与手改（当前固定开启）</span></div>
+            <span class="pf-val">已开启</span>
+          </div>
+        </section>
+
+        <section data-pane="appearance" hidden>
+          <div class="pf-set-row" data-search="主题 theme 亮色 暗色 系统 dark light">
+            <div class="pf-set-meta"><b>界面主题</b><span>跟随系统时会随操作系统外观切换</span></div>
+            <select id="set-theme">
+              <option value="system">跟随系统</option>
+              <option value="light">亮色</option>
+              <option value="dark">暗色</option>
+            </select>
+          </div>
+          <div class="pf-set-row" data-search="强调色 accent 颜色 color">
+            <div class="pf-set-meta"><b>强调色</b><span>按钮、选中态、Agent 状态的强调颜色</span></div>
+            <div class="pf-accent-picks" id="set-accent">
+              <button type="button" data-accent="green" title="森林绿"><i></i></button>
+              <button type="button" data-accent="blue" title="海蓝"><i></i></button>
+              <button type="button" data-accent="amber" title="琥珀"><i></i></button>
+            </div>
+          </div>
+          <div class="pf-set-row" data-search="动效 motion animation 减少">
+            <div class="pf-set-meta"><b>减少动效</b><span>关闭弹窗、脉冲、过渡动画</span></div>
+            <label class="pf-set-check"><input id="set-reduce-motion" type="checkbox" /> 开启</label>
+          </div>
+        </section>
+
+        <section data-pane="editor" hidden>
+          <div class="pf-set-row" data-search="默认预设 preset photo illustration lineart">
+            <div class="pf-set-meta"><b>默认预设</b><span>新导入图片时使用的转换预设</span></div>
+            <select id="set-default-preset">
+              <option value="photo">照片</option>
+              <option value="illustration">插画</option>
+              <option value="lineart">线稿提取</option>
+            </select>
+          </div>
+          <div class="pf-set-row" data-search="默认尺寸 size 网格 grid">
+            <div class="pf-set-meta"><b>默认尺寸</b><span>新导入图片的目标网格长边</span></div>
+            <select id="set-default-size">
+              <option value="16">16</option><option value="24">24</option>
+              <option value="32">32</option><option value="48">48</option>
+              <option value="64">64</option><option value="96">96</option>
+              <option value="128">128</option><option value="192">192</option>
+              <option value="256">256</option><option value="512">512</option>
+            </select>
+          </div>
+          <div class="pf-set-row" data-search="网格线 grid 默认显示">
+            <div class="pf-set-meta"><b>默认显示网格线</b><span>新画布打开时的网格线状态</span></div>
+            <label class="pf-set-check"><input id="set-show-grid" type="checkbox" /> 显示</label>
+          </div>
+        </section>
+
+        <section data-pane="engine" hidden>
+          <div class="pf-set-row" data-search="引擎 engine 地址 端口 port">
+            <div class="pf-set-meta"><b>引擎地址</b><span>本地 FastAPI 服务，仅回环访问</span></div>
+            <code class="pf-set-code">127.0.0.1:8700</code>
+          </div>
+          <div class="pf-set-row" data-search="引擎 状态 status health">
+            <div class="pf-set-meta"><b>服务状态</b><span>健康检查与 Provider 状态</span></div>
+            <span class="pf-val" id="set-engine-status">检测中…</span>
+          </div>
+          <div class="pf-set-row" data-search="模型 model onnx 线稿 抠图">
+            <div class="pf-set-meta"><b>AI 模型</b><span>线稿与主体抠图模型是否就位</span></div>
+            <span class="pf-val" id="set-model-status">—</span>
+          </div>
+          <div class="pf-set-actions"><button type="button" class="pf-btn" id="set-engine-refresh">刷新状态</button></div>
+          <p class="pf-mute">模型权重不随仓库分发；下载方式见 models/README.md。</p>
+        </section>
+
+        <section data-pane="mcp" hidden>
+          <p class="pf-mute" id="mcp-summary">管理已接入的 Agent 与允许使用的功能。</p>
+          <div class="pf-set-sub">已接入 Agent</div>
+          <div id="mcp-agent-list" class="pf-settings-agentlist"></div>
+          <p class="pf-mute" id="mcp-agent-empty" hidden>暂无 Agent 接入。启动 MCP 客户端后会自动出现在这里。</p>
+          <div class="pf-set-sub">允许的功能 <span id="mcp-perm-agent"></span></div>
+          <div id="mcp-feature-list" class="pf-settings-featurelist"></div>
+          <p class="pf-mute" id="mcp-perm-empty" hidden>选择一个 Agent 后可配置它可使用的功能。</p>
+          <p class="pf-mute">权限保存在本地并同步到引擎，MCP 服务在执行工具时按此校验。</p>
+        </section>
+
+        <section data-pane="shortcuts" hidden>
+          <div class="pf-set-row" data-search="撤销 undo 重做 redo Ctrl+Z Ctrl+Y">
+            <div class="pf-set-meta"><b>撤销 / 重做</b><span>统一历史栈</span></div>
+            <code class="pf-set-code">Ctrl+Z / Ctrl+Y</code>
+          </div>
+          <div class="pf-set-row" data-search="移动 move 选区 select 铅笔 pencil 橡皮 eraser 油漆桶 bucket 取色 picker">
+            <div class="pf-set-meta"><b>常用工具</b><span>移动 / 选区 / 铅笔 / 橡皮 / 油漆桶 / 取色</span></div>
+            <code class="pf-set-code">V · S · B · E · G · I</code>
+          </div>
+          <div class="pf-set-row" data-search="细节 detail 抠背景 alpha 直线 line 矩形 rect 椭圆 ellipse 对称 symmetry">
+            <div class="pf-set-meta"><b>进阶工具</b><span>细节 / 抠背景 / 直线 / 矩形 / 椭圆 / 对称</span></div>
+            <code class="pf-set-code">D · W · L · R · O · M</code>
+          </div>
+          <div class="pf-set-row" data-search="手掌 hand 空格 space 缩放 zoom">
+            <div class="pf-set-meta"><b>临时手掌 / 缩放</b><span>按住空格拖拽画布；滚轮缩放</span></div>
+            <code class="pf-set-code">Space / 滚轮</code>
+          </div>
+          <div class="pf-set-row" data-search="取消选择 esc escape 选区">
+            <div class="pf-set-meta"><b>取消选区</b><span>清除矩形或套索选区</span></div>
+            <code class="pf-set-code">Esc</code>
+          </div>
+          <p class="pf-mute">快捷键自定义将在后续版本开放；当前为固定映射。</p>
+        </section>
+
+        <section data-pane="advanced" hidden>
+          <div class="pf-set-row" data-search="导出设置 export settings json backup">
+            <div class="pf-set-meta"><b>导出设置</b><span>把当前设置保存为 JSON 备份</span></div>
+            <button type="button" class="pf-btn" id="set-export">导出…</button>
+          </div>
+          <div class="pf-set-row" data-search="导入设置 import settings json restore">
+            <div class="pf-set-meta"><b>导入设置</b><span>从 JSON 备份恢复设置</span></div>
+            <button type="button" class="pf-btn" id="set-import">导入…</button>
+            <input id="set-import-file" type="file" accept=".json,application/json" hidden />
+          </div>
+          <div class="pf-set-row" data-search="恢复默认 reset default">
+            <div class="pf-set-meta"><b>恢复默认</b><span>重置主题、默认预设、通知与快捷键设置</span></div>
+            <button type="button" class="pf-btn" id="set-reset">恢复默认</button>
+          </div>
+          <p class="pf-mute" id="set-import-status"></p>
+          <p class="pf-mute">设置存储在浏览器 localStorage（`pf.settings.v1`）。</p>
+        </section>
+
+        <section data-pane="about" hidden>
+          <div class="pf-set-row" data-search="版本 version about">
+            <div class="pf-set-meta"><b>PixelForge</b><span>图片转像素画 + 像素编辑器</span></div>
+            <code class="pf-set-code">0.1.0</code>
+          </div>
+          <div class="pf-set-row" data-search="许可证 license mit third party">
+            <div class="pf-set-meta"><b>许可证</b><span>发布前补齐 LICENSE 与第三方声明</span></div>
+            <code class="pf-set-code">MIT（待发布）</code>
+          </div>
+          <div class="pf-set-row" data-search="模型 model license informative drawings u2net rembg">
+            <div class="pf-set-meta"><b>第三方模型</b><span>Informative Drawings / U²-Net / rembg</span></div>
+            <span class="pf-val">MIT / Apache-2.0 / MIT</span>
+          </div>
+          <p class="pf-mute">本地个人工具：图片不上传云端，模型在本机运行。</p>
+        </section>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 帮助中心（A2：界面指导文案集中于此，按 F1 打开） -->
+  <dialog id="helpdlg" class="pf-settings pf-help" aria-labelledby="help-title">
+    <div class="pf-settings-head">
+      <div class="pf-settings-title">
+        <h3 id="help-title">使用指南</h3>
+        <p class="pf-mute">快速开始 · 工具与快捷键 · 参数 · 导出 · 常见问题</p>
+      </div>
+      <div class="pf-spacer"></div>
+      <span class="pf-val mono">F1</span>
+      <button type="button" class="pf-btn" id="help-close">关闭</button>
+    </div>
+    <div class="pf-settings-body">
+      <nav class="pf-settings-nav" id="help-nav" aria-label="帮助分类"></nav>
+      <div class="pf-settings-panes" id="help-panes"></div>
+    </div>
+  </dialog>
+
+  <!-- 首次启动引导（A2）：四步走完即可开始 -->
+  <dialog id="onboarddlg" class="pf-onboarding" aria-label="新手引导">
+    <div class="pf-ob-body">
+      <p class="pf-ob-kicker" id="ob-kicker">第 1 / 4 步</p>
+      <div class="pf-ob-step" data-ob-step="0">
+        <h3>选择界面语言</h3>
+        <p class="pf-ob-text">之后随时可以在「设置 → 通用」里切换。</p>
+        <div class="pf-ob-actions pf-ob-langs">
+          <button type="button" class="pf-btn" id="ob-lang-zh" aria-pressed="true">简体中文</button>
+          <button type="button" class="pf-btn" id="ob-lang-en" aria-pressed="false">English</button>
+        </div>
+      </div>
+      <div class="pf-ob-step" data-ob-step="1" hidden>
+        <h3>打开一张图片</h3>
+        <p class="pf-ob-text">支持多选或整个文件夹；也可以先打开内置示例项目看看效果。</p>
+        <div class="pf-ob-actions">
+          <button type="button" class="pf-btn primary" id="ob-open">打开图片…</button>
+          <button type="button" class="pf-btn" id="ob-sample">打开示例项目</button>
+        </div>
+      </div>
+      <div class="pf-ob-step" data-ob-step="2" hidden>
+        <h3>调整转换效果</h3>
+        <p class="pf-ob-text">选择预设与尺寸；左侧参数改动会即时重算当前文档，勾选「应用到全部标签」可一次改所有文档。</p>
+      </div>
+      <div class="pf-ob-step" data-ob-step="3" hidden>
+        <h3>手改并导出</h3>
+        <p class="pf-ob-text">用工具手改像素；完成后在「导出」里选择内容、格式与倍率。随时按 F1 查看使用指南。</p>
+      </div>
+      <div class="pf-ob-foot">
+        <div class="pf-ob-dots" aria-hidden="true"><span class="on"></span><span></span><span></span><span></span></div>
+        <div class="pf-spacer"></div>
+        <button type="button" class="pf-btn" id="ob-skip">跳过</button>
+        <button type="button" class="pf-btn" id="ob-prev" disabled>上一步</button>
+        <button type="button" class="pf-btn primary" id="ob-next">下一步</button>
+      </div>
+    </div>
+  </dialog>
+
   <script type="module" src="/src/main.ts"></script>
 
   <!-- 转换进度（重转换时中央弹出） -->
@@ -383,7 +631,6 @@
         <label class="pf-export-row" id="exp-sheet-row" title="同尺寸文档合并为水平条带（游戏精灵图）">
           <input type="checkbox" id="exp-sheet"> 精灵图集（同尺寸合并条带）
         </label>
-        <p class="pf-mute">勾选多个文档即可批量导出，每个文档一个文件；引擎线稿按源图原始分辨率导出，像素墨线层/合成按倍率最近邻放大。图集按尺寸分组，每组一个文件。「索引 PNG」输出 PLTE 调色板（透明格写 tRNS），保留色板结构，最多 256 色。</p>
         <div class="pf-spacer"></div>
         <div class="pf-export-btns">
           <button class="pf-btn" id="exp-cancel">取消</button>

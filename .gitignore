@@ -16,5 +16,19 @@ tmp_verify/
 # Model weights (large binaries)
 *.onnx
 
+# Local test media / screenshots（测试素材不随发行版分发）
+/test.png
+/test2.jpg
+/a3-*.png
+.screenshots/
+
+# Logs / local env
+*.log
+.venv/
+.DS_Store
+.ruff_cache/
+.coverage
+htmlcov/
+
 # Local tooling
 .trae/

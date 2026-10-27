@@ -8,6 +8,11 @@ html, body { margin: 0; height: 100% }
   --pf-panel: light-dark(#fbfbfd, #1d1f24); --pf-panel2: light-dark(#f1f2f5, #232529);
   --pf-border: light-dark(#d9dbe1, #33363d); --pf-dim: light-dark(#747681, #979aa3);
   --pf-accent: light-dark(#2e8b57, #54c284); --pf-accent-fg: light-dark(#ffffff, #0e2417) }
+:root[data-accent="blue"] { --pf-accent: light-dark(#2b6cb0, #63b3ed); --pf-accent-fg: light-dark(#ffffff, #0b1a2a) }
+:root[data-accent="amber"] { --pf-accent: light-dark(#a16207, #f0b43c); --pf-accent-fg: light-dark(#ffffff, #241a05) }
+:root.pf-reduce-motion *, :root.pf-reduce-motion *::before, :root.pf-reduce-motion *::after {
+  animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+  transition-duration: .01ms !important; scroll-behavior: auto !important }
 .pf-app { display: flex; flex-direction: column; height: 100vh; overflow: hidden;
   background: light-dark(#eceef2, #141519); color: light-dark(#26282c, #e7e8ea);
   font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
@@ -188,6 +193,9 @@ details.pf-card > summary.pf-card-h:hover { color: var(--pf-text, inherit) }
   display: flex; align-items: center; gap: 10px; padding: 7px 10px 7px 12px; border-radius: 8px;
   background: var(--pf-panel); border: 1px solid var(--pf-border); box-shadow: 0 4px 18px rgba(0,0,0,.3);
   font-size: 12px; color: var(--pf-dim) }
+#agent-toast { color: inherit; font-weight: 600; border-color: color-mix(in srgb, var(--pf-accent) 55%, var(--pf-border)) }
+#agent-toast::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--pf-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pf-accent) 20%, transparent); flex: none }
 .pf-ctx button { display: block; width: 100%; text-align: left; font: inherit; font-size: 12px; color: inherit;
   background: none; border: 0; border-radius: 5px; padding: 6px 10px; cursor: pointer }
 .pf-ctx button:hover { background: var(--pf-border) }
@@ -234,6 +242,11 @@ details.pf-card > summary.pf-card-h:hover { color: var(--pf-text, inherit) }
   background: var(--pf-panel); border-top: 1px solid var(--pf-border); font-size: 12px; color: var(--pf-dim); flex: none }
 .pf-status .pf-btn { padding: 3px 10px; font-size: 12px; flex: none }
 .pf-status #stat-doc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.pf-agent-sync { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--pf-accent) 45%, var(--pf-border)); border-radius: 999px;
+  color: inherit; font-size: 11px; white-space: nowrap }
+.pf-agent-sync::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--pf-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pf-accent) 18%, transparent) }
 .pf-status #zoom-v { min-width: 42px; text-align: center; flex: none }
 .pf-status #stat-cursor { flex: none; margin-left: 4px }
 .pf-under { display: flex; align-items: center; gap: 6px; color: var(--pf-dim); flex: none }
@@ -251,6 +264,151 @@ details.pf-card > summary.pf-card-h:hover { color: var(--pf-text, inherit) }
 .pf-dlg-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px }
 .pf-dlg::backdrop { background: rgba(0,0,0,.35) }
 
+/* MCP / Agent 入口与管理窗 */
+.pf-mcp-entry { gap: 7px; padding-left: 9px; }
+.pf-mcp-entry .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pf-dim); flex: none }
+.pf-mcp-entry .dot.on { background: var(--pf-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pf-accent) 22%, transparent) }
+.pf-mcp-entry .dot.busy { background: #e0a53a; animation: pf-mcp-dot 1.2s ease-in-out infinite }
+@keyframes pf-mcp-dot { 50% { opacity: .35; transform: scale(.75) } }
+
+/* 全局设置中心（MCP 管理已迁入） */
+/* 作者样式里的 display:flex 会覆盖 UA 对关闭状态 dialog 的 display:none，
+   必须显式隐藏，否则设置窗会留在文档流里、主界面下滑即可见。 */
+.pf-settings:not([open]) { display: none }
+.pf-settings { width: min(1040px, 94vw); height: min(720px, 88vh); padding: 0; border: 1px solid var(--pf-border);
+  border-radius: 16px; background: var(--pf-panel); color: inherit; overflow: hidden;
+  display: flex; flex-direction: column }
+.pf-settings::backdrop { background: rgba(0,0,0,.42); backdrop-filter: blur(3px) }
+.pf-settings-head { display: flex; align-items: center; gap: 16px; padding: 14px 18px;
+  border-bottom: 1px solid var(--pf-border); flex: none }
+.pf-settings-title h3 { margin: 0 0 2px; font-size: 15px }
+.pf-settings-title .pf-mute { margin: 0 }
+.pf-settings-search { margin-left: auto; display: flex; align-items: center; gap: 8px;
+  color: var(--pf-dim); font-size: 11px; flex: 0 1 360px; min-width: 0 }
+.pf-settings-search input { flex: 1; min-width: 0; font: inherit; font-size: 12px; color: inherit;
+  background: var(--pf-panel2); border: 1px solid var(--pf-border); border-radius: 7px; padding: 6px 10px }
+.pf-settings-head .pf-btn { flex: none }
+.pf-settings-body { flex: 1; display: grid; grid-template-columns: 180px 1fr; min-height: 0 }
+.pf-settings-nav { border-right: 1px solid var(--pf-border); padding: 10px 8px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px }
+.pf-settings-nav button { text-align: left; font: inherit; font-size: 12px; color: var(--pf-dim);
+  background: none; border: 1px solid transparent; border-radius: 7px; padding: 7px 10px; cursor: pointer }
+.pf-settings-nav button:hover { background: var(--pf-panel2); color: inherit }
+.pf-settings-nav button.active { background: var(--pf-accent); color: var(--pf-accent-fg);
+  border-color: transparent; font-weight: 600 }
+.pf-settings-nav button.no-match { opacity: .35 }
+.pf-settings-panes { overflow-y: auto; padding: 16px 22px 28px }
+.pf-settings-panes section { display: flex; flex-direction: column; gap: 10px }
+.pf-set-sub { font-size: 11px; font-weight: 600; letter-spacing: .8px; color: var(--pf-dim); margin: 8px 0 2px }
+.pf-set-sub span { font-weight: 400; letter-spacing: 0 }
+.pf-set-row { display: flex; align-items: center; gap: 16px; padding: 11px 14px;
+  border: 1px solid var(--pf-border); border-radius: 10px; background: var(--pf-panel2) }
+.pf-set-meta { flex: 1; min-width: 0 }
+.pf-set-meta b { display: block; font-size: 13px; font-weight: 600 }
+.pf-set-meta span { display: block; font-size: 11px; color: var(--pf-dim); margin-top: 2px }
+.pf-set-row select { min-width: 132px; font: inherit; color: inherit; background: var(--pf-panel);
+  border: 1px solid var(--pf-border); border-radius: 7px; padding: 5px 9px; flex: none }
+.pf-set-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--pf-dim); flex: none }
+.pf-set-check input { accent-color: var(--pf-accent) }
+.pf-set-code { font: 11px ui-monospace, Consolas, monospace; color: var(--pf-dim); flex: none;
+  background: var(--pf-panel); border: 1px solid var(--pf-border); border-radius: 6px; padding: 3px 8px }
+.pf-set-actions { display: flex; justify-content: flex-end; gap: 8px }
+.pf-accent-picks { display: flex; gap: 8px; flex: none }
+.pf-accent-picks button { width: 30px; height: 30px; padding: 3px; border-radius: 50%;
+  border: 2px solid var(--pf-border); background: var(--pf-panel); cursor: pointer }
+.pf-accent-picks button i { display: block; width: 100%; height: 100%; border-radius: 50%; background: #2e8b57 }
+.pf-accent-picks button[data-accent="blue"] i { background: #2b6cb0 }
+.pf-accent-picks button[data-accent="amber"] i { background: #c98a2e }
+.pf-accent-picks button.sel { border-color: var(--pf-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pf-accent) 20%, transparent) }
+.pf-settings-agentlist { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto }
+.pf-settings-agentlist .pf-mcp-agent { margin: 2px 0 }
+.pf-settings-featurelist { display: flex; flex-direction: column; gap: 2px; max-height: 340px; overflow-y: auto }
+.pf-settings-featurelist .pf-mcp-feature { margin: 2px 0 }
+
+/* A2 帮助中心：复用设置窗骨架，正文按小节排版 */
+.pf-help { width: min(920px, 94vw); height: min(760px, 88vh) }
+.pf-help .pf-settings-panes { padding: 18px 24px 28px }
+.pf-help-sec h4 { margin: 10px 0 0; font-size: 13px; font-weight: 600 }
+.pf-help-sec h4:first-child { margin-top: 0 }
+.pf-help-sec p { margin: 0; font-size: 12px; line-height: 1.65; color: var(--pf-dim) }
+.pf-help-sec ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.65; color: var(--pf-dim) }
+.pf-help-sec li { margin: 3px 0 }
+.pf-help-keys { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; align-items: center;
+  font-size: 12px; color: var(--pf-dim) }
+.pf-help-keys kbd { font: 11px ui-monospace, Consolas, monospace; color: inherit; background: var(--pf-panel2);
+  border: 1px solid var(--pf-border); border-radius: 5px; padding: 1px 7px; justify-self: start }
+
+/* A2 首次启动引导 */
+.pf-onboarding { width: min(540px, 92vw); padding: 0; border: 1px solid var(--pf-border);
+  border-radius: 14px; background: var(--pf-panel); color: inherit }
+.pf-onboarding::backdrop { background: rgba(0,0,0,.38); backdrop-filter: blur(2px) }
+.pf-ob-body { padding: 22px 24px 18px; display: flex; flex-direction: column }
+.pf-ob-kicker { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .8px; color: var(--pf-dim) }
+.pf-ob-step h3 { margin: 0 0 8px; font-size: 17px }
+.pf-ob-text { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--pf-dim) }
+.pf-ob-actions { display: flex; gap: 8px; margin-top: 14px }
+.pf-ob-foot { display: flex; align-items: center; gap: 8px; margin-top: 20px; padding-top: 14px;
+  border-top: 1px solid var(--pf-border) }
+.pf-ob-dots { display: flex; gap: 6px }
+.pf-ob-dots span { width: 7px; height: 7px; border-radius: 50%; background: var(--pf-border) }
+.pf-ob-dots span.on { background: var(--pf-accent) }
+
+.pf-mcp-agent { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  font: inherit; color: inherit; background: var(--pf-panel2); border: 1px solid var(--pf-border);
+  border-radius: 9px; padding: 9px 10px; margin: 6px 0; cursor: pointer }
+.pf-mcp-agent:hover { border-color: var(--pf-accent) }
+.pf-mcp-agent.sel { border-color: var(--pf-accent); box-shadow: inset 0 0 0 1px var(--pf-accent) }
+.pf-mcp-avatar { width: 30px; height: 30px; border-radius: 8px; flex: none; display: grid; place-items: center;
+  font-weight: 700; font-size: 12px; color: var(--pf-accent-fg); background: var(--pf-accent) }
+.pf-mcp-agent.offline .pf-mcp-avatar { background: var(--pf-border); color: var(--pf-dim) }
+.pf-mcp-meta { min-width: 0; flex: 1 }
+.pf-mcp-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.pf-mcp-sub { font-size: 11px; color: var(--pf-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.pf-mcp-state { font-size: 10px; color: var(--pf-dim); flex: none; display: flex; align-items: center; gap: 4px }
+.pf-mcp-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--pf-dim) }
+.pf-mcp-state.on i { background: var(--pf-accent) }
+.pf-mcp-state.busy i { background: #e0a53a; animation: pf-mcp-dot 1.2s ease-in-out infinite }
+.pf-mcp-feature { display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px; margin: 7px 0;
+  border: 1px solid var(--pf-border); border-radius: 9px; background: var(--pf-panel2); cursor: pointer }
+.pf-mcp-feature:hover { border-color: var(--pf-accent) }
+.pf-mcp-feature input { margin: 2px 0 0; accent-color: var(--pf-accent); flex: none }
+.pf-mcp-feature .txt { min-width: 0 }
+.pf-mcp-feature b { display: block; font-size: 12px; font-weight: 600 }
+.pf-mcp-feature span { display: block; font-size: 11px; color: var(--pf-dim) }
+.pf-mcp-feature code { font: 10px ui-monospace, Consolas, monospace; color: var(--pf-dim); opacity: .75 }
+
+/* Agent 控制蒙版 */
+.pf-agent-overlay { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
+  padding: 24px; background: rgba(7, 9, 13, .58); backdrop-filter: blur(7px) saturate(.72);
+  animation: pf-overlay-in .18s ease-out }
+@keyframes pf-overlay-in { from { opacity: 0 } to { opacity: 1 } }
+.pf-agent-card { position: relative; width: min(420px, calc(100vw - 40px)); text-align: center;
+  padding: 30px 30px 26px; border: 1px solid var(--pf-border); border-radius: 20px;
+  background: var(--pf-panel); color: inherit; box-shadow: 0 24px 80px rgba(0,0,0,.5);
+  animation: pf-agent-in .22s cubic-bezier(.2,.8,.2,1) }
+@keyframes pf-agent-in { from { opacity: 0; transform: translateY(10px) scale(.97) } to { opacity: 1; transform: none } }
+.pf-agent-card::before { content: ""; position: absolute; inset: -1px; border-radius: 20px; pointer-events: none;
+  background: linear-gradient(130deg, transparent 18%, color-mix(in srgb, var(--pf-accent) 55%, transparent) 50%, transparent 82%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude; padding: 1px; opacity: .55 }
+.pf-agent-orb { width: 68px; height: 68px; margin: 0 auto 14px; border-radius: 50%; display: grid; place-items: center;
+  background: radial-gradient(circle at 32% 30%, color-mix(in srgb, var(--pf-accent) 28%, transparent), transparent 66%);
+  border: 1px solid color-mix(in srgb, var(--pf-accent) 45%, var(--pf-border)) }
+.pf-agent-orb span { width: 18px; height: 18px; border-radius: 50%; background: var(--pf-accent);
+  box-shadow: 0 0 0 9px color-mix(in srgb, var(--pf-accent) 18%, transparent);
+  animation: pf-agent-pulse 1.6s ease-in-out infinite }
+@keyframes pf-agent-pulse { 0%,100% { transform: scale(.82); opacity: .7 } 50% { transform: scale(1.12); opacity: 1 } }
+.pf-agent-kicker { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; color: var(--pf-accent); margin-bottom: 7px }
+.pf-agent-card h2 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.2px }
+.pf-agent-activity { margin: 0; font-size: 12px; color: var(--pf-dim); min-height: 18px }
+.pf-agent-hint { margin: 12px 0 20px; font-size: 11px; color: var(--pf-dim) }
+.pf-agent-card .pf-btn { min-width: 132px; padding: 8px 18px; font-size: 13px }
+
 @media (max-width: 780px) {
   .pf-side { display: none }
+  .pf-settings-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr }
+  .pf-settings-nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--pf-border) }
+  .pf-settings-nav button { white-space: nowrap }
+  .pf-settings-search { flex-basis: 180px }
+  .pf-settings-search span { display: none }
 }

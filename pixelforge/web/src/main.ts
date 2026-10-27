@@ -10,6 +10,12 @@ import {
   type LineartAsset,
 } from "./store";
 import { mountLayers, mountPalette, mountTabs, mountTools, mountHistory, mountColorLib } from "./panels";
+import { mountMcpUi, setAgentControl, openMcpManager, getMcpAgents } from "./mcp-ui";
+import { mountJobSync, type JobWsPayload } from "./job-sync";
+import { mountSettings, getSettings, openSettings } from "./settings";
+import { mountHelp } from "./help";
+import { mountOnboarding } from "./onboarding";
+import { openSampleProject } from "./sample";
 import { putSource, getSource, clearSources } from "./source-store";
 import { bucketFill, flipSelection, finishMove, copySelectionToOffset, paintCells, pixelPerfectLine, brushTipCells,
   shapeCells, shapePreviewApply, shapePreviewEnd, magneticSnap, polygonCells,
@@ -167,6 +173,61 @@ function refreshBackgroundLayer(doc: EditorDoc): void {
   for (let i = 0; i < doc.alpha.length; i++) if (!doc.alpha[i]) bg.data.set(i, { fill: idx });
 }
 
+/** MCP-3B：把服务端 job 的 revision 更新应用到同 jobId 的文档；本地手改层保持在上层。 */
+let agentToastTimer = 0;
+let lastJobUpdate: { jobId: string; name: string; revision: number; action: string } | null = null;
+function showAgentToast(text: string): void {
+  let el = document.getElementById("agent-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "agent-toast";
+    el.className = "pf-toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  window.clearTimeout(agentToastTimer);
+  agentToastTimer = window.setTimeout(() => el?.remove(), 8000);
+}
+
+async function applyJobUpdate(doc: EditorDoc, update: JobWsPayload): Promise<void> {
+  if (doc.lineart || update.job_id !== doc.jobId) return;
+  if (update.width !== doc.w || update.height !== doc.h) {
+    setStatus(`Agent 更新尺寸不匹配（${update.width}×${update.height}），已忽略`);
+    return;
+  }
+  if (doc.jobRevision != null && update.revision <= doc.jobRevision) return;
+
+  const alpha = update.alpha_png
+    ? await decodeAlphaPng(update.alpha_png, update.width, update.height)
+    : null;
+  if (doc.jobId !== update.job_id) return; // 解码期间文档已重转换到新 job
+
+  const fill = Int32Array.from(update.fill.flat());
+  const ink = update.ink ? Int32Array.from(update.ink.flat()) : null;
+  const paletteBase = update.palette;
+  invalidateBitmaps(doc);
+  updateDoc(doc, {
+    fill,
+    ink,
+    alpha,
+    paletteBase,
+    palette: transformPalette(paletteBase, doc.paletteFx),
+    jobRevision: update.revision,
+    colorsUsed: new Set(Array.from(fill)).size,
+    dirty: true,
+  });
+  refreshBackgroundLayer(doc);
+  invalidateBitmaps(doc);
+  redrawCanvas();
+  const action = update.action || "编辑";
+  lastJobUpdate = { jobId: update.job_id, name: doc.name, revision: update.revision, action };
+  const badge = $<HTMLElement>("agent-sync");
+  badge.hidden = false;
+  badge.textContent = `Agent · ${doc.name} · rev ${update.revision}`;
+  setStatus(`Agent 更新 ${doc.name} · ${action}`);
+  if (getSettings().agentNotifications) showAgentToast(`Agent 更新 ${doc.name} · ${action}`);
+}
+
 async function docFromResponse(
   name: string,
   r: ConvertResponse,
@@ -180,6 +241,7 @@ async function docFromResponse(
   const doc = addDoc({
     name,
     jobId: r.job_id,
+    jobRevision: r.revision ?? 0,
     w: r.width,
     h: r.height,
     palette: r.palette,
@@ -467,6 +529,7 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
         lineart: undefined,
         name: doc.name,
         jobId: r.job_id,
+        jobRevision: r.revision ?? 0,
         w: r.width,
         h: r.height,
         palette: transformPalette(r.palette, doc.paletteFx),
@@ -492,6 +555,7 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
         // 尺寸后缀只在首次建档时有意义，重转换后去掉避免名不副实
         name: dimsChanged ? doc.name.replace(/_\d+$/, "") : doc.name,
         jobId: r.job_id,
+        jobRevision: r.revision ?? 0,
         w: r.width,
         h: r.height,
         palette: transformPalette(r.palette, doc.paletteFx),
@@ -1683,9 +1747,14 @@ function syncDocModeUI(): void {
   }
   ($("detail-level") as HTMLSelectElement).value = String(getState().detailLevel);
   syncDetailButtons();
-  $("mode-note").textContent = lineartPreset || lineartDoc
-    ? "线稿模式：按源图分辨率清晰提取，不使用像素网格与尺寸。"
-    : "改动即时重转换当前文档；空白画布不受影响。";
+  const modeNote = $("mode-note");
+  if (lineartPreset || lineartDoc) {
+    modeNote.textContent = "线稿模式：按源图分辨率清晰提取，不使用像素网格与尺寸。";
+    modeNote.hidden = false;
+  } else {
+    modeNote.textContent = "";
+    modeNote.hidden = true;
+  }
   if (doc?.lineart) {
     $("la-dims").textContent = `${doc.w}×${doc.h} px · ${doc.lineart.mode.toUpperCase()}`;
   }
@@ -1699,11 +1768,17 @@ function syncDetailButtons(): void {
   const n = can ? doc!.detailMask?.size ?? 0 : 0;
   ($("detail-apply") as HTMLButtonElement).disabled = !can || n === 0;
   ($("detail-clear") as HTMLButtonElement).disabled = !can || n === 0;
-  $("detail-note").textContent = can
-    ? n
-      ? `已标记 ${n} 格（Alt 擦除）；重算只写回标记格，可撤销。`
-      : "用「细节」笔刷（D）标出要保细节的区域；重算只写回标记格，可撤销。"
-    : "空白画布没有源图，无法细节重算。";
+  const note = $("detail-note");
+  if (!can) {
+    note.textContent = "空白画布没有源图，无法细节重算。";
+    note.hidden = false;
+  } else if (n) {
+    note.textContent = `已标记 ${n} 格`;
+    note.hidden = false;
+  } else {
+    note.textContent = "";
+    note.hidden = true;
+  }
 }
 
 for (const [id, key, fmt] of rpRanges) {
@@ -2043,6 +2118,7 @@ function createBlank(): void {
 $("new-ok").addEventListener("click", createBlank);
 $("empty-open").addEventListener("click", () => $("file-input").click());
 $("empty-new").addEventListener("click", () => newDlg.showModal());
+$("empty-sample").addEventListener("click", () => openSampleProject());
 for (const id of ["new-w", "new-h"]) {
   $(id).addEventListener("keydown", (e) => {
     if (e.key === "Enter") createBlank();
@@ -2098,6 +2174,7 @@ health()
 /* ---------------------------------------------------------------- 会话自动保存/恢复（M3） */
 const urlParams = new URLSearchParams(location.search);
 const demoMode = urlParams.has("demo");
+const agentDemo = urlParams.has("agentDemo"); // MCP Agent 控制蒙版视觉验收
 const sessionDisabled = demoMode; // demo 自动建档不覆盖用户会话；测试可手动 __pf.autosave()
 const SESSION_KEY = "pf.session.v1";
 
@@ -2520,6 +2597,11 @@ mountPalette($("palette"), $("pal-count"), $("pal-custom"), $("pal-sort") as HTM
 mountTools();
 mountHistory($("history"));
 mountColorLib($("colorlib"));
+mountSettings();
+mountHelp();
+mountOnboarding();
+mountMcpUi({ demo: agentDemo });
+mountJobSync(applyJobUpdate);
 redrawCanvas();
 void offerRestore();
 
@@ -2554,5 +2636,21 @@ if ((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV) {
         ? d.layers.map((l) => ({ name: l.name, visible: l.visible, bg: !!l.bg, base: l.id === d.baseLayerId }))
         : null;
     },
+    /** MCP UI 验收：打开管理窗 / 控制蒙版 / 读取 Agent 状态。 */
+    mcp: {
+      open: openMcpManager,
+      control: setAgentControl,
+      agents: getMcpAgents,
+      sync: () => ({
+        lastJobUpdate,
+        docs: getState().docs.map((d) => ({
+          name: d.name,
+          jobId: d.jobId,
+          revision: d.jobRevision,
+          fill0: d.fill[0],
+        })),
+      }),
+    },
+    settings: { open: openSettings, current: getSettings },
   };
 }

@@ -113,6 +113,8 @@ export interface EditorDoc {
   /** 线稿文档：非像素网格，只读高分辨率视图；fill/ink/layers/palette 为空。 */
   lineart?: LineartAsset;
   jobId: string;
+  /** MCP-3B：当前文档对应服务端 job 的 revision（WS 更新按此去重）。 */
+  jobRevision?: number;
   w: number;
   h: number;
   palette: [number, number, number][];     // 当前显示色板（含 paletteFx 变换）
