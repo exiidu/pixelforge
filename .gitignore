@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .mimosa/
 .cache/
+build/
+*.egg-info/
 
 # Node
 node_modules/
