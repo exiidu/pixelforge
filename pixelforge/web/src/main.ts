@@ -343,6 +343,7 @@ $("folder-input").addEventListener("change", (e) => {
 });
 
 /** 批量导入：逐个转换建档；坏文件跳过不中断，完成后汇总失败清单。 */
+let progAbort: AbortController | null = null;
 async function importFiles(all: File[], label: string): Promise<void> {
   const files = all
     .filter((f) => /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name))
@@ -362,34 +363,46 @@ async function importFiles(all: File[], label: string): Promise<void> {
   }, 100);
   tick(`${lineartMode ? "正在提取线稿" : "正在导入"} 1/${files.length} · ${files[0].name}`);
   if (!progd.open) progd.showModal();
+  const abort = new AbortController();
+  progAbort = abort;
+  const cancelBtn = $("prog-cancel") as HTMLButtonElement;
+  cancelBtn.hidden = false;
   const failed: string[] = [];
   let ok = 0;
   try {
     for (let i = 0; i < files.length; i++) {
+      if (abort.signal.aborted) break;
       const f = files[i];
       tick(`${lineartMode ? "正在提取线稿" : "正在导入"} ${i + 1}/${files.length} · ${f.name}`);
       try {
         const name = f.name.replace(/\.[^.]+$/, "");
         if (lineartMode) {
           const t = performance.now();
-          const r = await extractLineartFile(f, extractMode);
+          const r = await extractLineartFile(f, extractMode, abort.signal);
           const d = docFromLineartResponse(name, r, { file: f }, ctx.recipe, ctx.presetName,
             Math.round(performance.now() - t));
           await persistSource(d, f);
         } else {
-          const r = await convertFile(f, ctx.presetName, getState().size, recipeOverrides(ctx.recipe));
+          const r = await convertFile(f, ctx.presetName, getState().size, recipeOverrides(ctx.recipe), abort.signal);
           const d = await docFromResponse(name, r, { file: f }, ctx.recipe, ctx.presetName);
           await persistSource(d, f);
         }
         ok++;
       } catch (err) {
+        if ((err as Error).name === "AbortError") break;
         failed.push(f.name);
         console.warn("导入失败", f.name, err);
       }
     }
   } finally {
+    progAbort = null;
+    cancelBtn.hidden = true;
     window.clearInterval(timer);
     if (progd.open) progd.close();
+  }
+  if (abort.signal.aborted) {
+    setStatus(`已取消批量导入 · 完成 ${ok}/${files.length} 张`);
+    return;
   }
   const failMsg = failed.length
     ? ` · 失败 ${failed.length}（${failed.slice(0, 3).join("、")}${failed.length > 3 ? "…" : ""}）`
@@ -440,6 +453,7 @@ async function reconvertDocLineart(doc: EditorDoc): Promise<void> {
     $("prog-time").textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
   }, 100);
   if (!progd.open) progd.showModal();
+  ($("prog-cancel") as HTMLButtonElement).hidden = true;
   try {
     const mode = doc.recipe.lineart === "xdog" ? "xdog" : "onnx";
     const r = doc.src.file
@@ -507,6 +521,7 @@ async function reconvertDoc(doc: EditorDoc): Promise<void> {
     $("prog-time").textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
   }, 100);
   if (!progd.open) progd.showModal();
+  ($("prog-cancel") as HTMLButtonElement).hidden = true;
   try {
     const { size } = getState();
     // M5-4：锁定开启时按当前色板刷新锁定色（语义 = "保留现在这套色"）
@@ -1646,6 +1661,7 @@ $("exp-ok").addEventListener("click", async () => {
 
 /* 进度弹窗不可手动关闭 */
 ($("progd") as HTMLDialogElement).addEventListener("cancel", (e) => e.preventDefault());
+$("prog-cancel").addEventListener("click", () => progAbort?.abort());
 
 subscribe(redrawCanvas);
 

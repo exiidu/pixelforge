@@ -11,6 +11,7 @@ AIProviders 调用；模型在位自动挂真 Provider（惰性加载），缺�
 from __future__ import annotations
 
 import hashlib
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
@@ -22,6 +23,8 @@ from engine.types import ConversionArtifacts, ConversionResult, IndexGrid, Palet
 
 # M5-0 网格 alpha：源区 alpha 均值 < 该阈值记透明（像素画按格二值化）
 ALPHA_TRANSPARENT_THRESHOLD = 0.35
+# 0.6.0：S0/S1 预计算缓存上限（每项约 P0+E+L）。批量导入时防止内存随图片数线性增长。
+ART_CACHE_MAX = 4
 
 
 def grid_alpha(alpha: np.ndarray, mapping, threshold: float = ALPHA_TRANSPARENT_THRESHOLD) -> np.ndarray:
@@ -76,7 +79,7 @@ class AIProviders:
 class ConversionPipeline:
     def __init__(self, ai: AIProviders | None = None) -> None:
         self.ai = ai or AIProviders()
-        self._art_cache: dict[str, ConversionArtifacts] = {}
+        self._art_cache: OrderedDict[str, ConversionArtifacts] = OrderedDict()
 
     # ------------------------------------------------------------------
     def run(
@@ -180,13 +183,19 @@ class ConversionPipeline:
     def _precompute(self, image: RGBImage, recipe: Recipe) -> ConversionArtifacts:
         """S0 预处理 + S1 结构分析（含可选 AI 插点），按缓存键复用。TODO"""
         key = self._art_cache_key(image, recipe)
-        if key not in self._art_cache:
-            from engine.stages import s0_preprocess, s1_structure  # 延迟导入避免环
+        hit = self._art_cache.get(key)
+        if hit is not None:
+            self._art_cache.move_to_end(key)  # LRU：最近使用保留
+            return hit
+        from engine.stages import s0_preprocess, s1_structure  # 延迟导入避免环
 
-            P0 = s0_preprocess.run(image, recipe, self.ai.matting)
-            E, L = s1_structure.run(P0, recipe, self.ai.lineart)
-            self._art_cache[key] = ConversionArtifacts(P0=P0, E=E, L=L)
-        return self._art_cache[key]
+        P0 = s0_preprocess.run(image, recipe, self.ai.matting)
+        E, L = s1_structure.run(P0, recipe, self.ai.lineart)
+        art = ConversionArtifacts(P0=P0, E=E, L=L)
+        self._art_cache[key] = art
+        while len(self._art_cache) > ART_CACHE_MAX:
+            self._art_cache.popitem(last=False)
+        return art
 
     def _grid_stages(
         self, image: RGBImage, art: ConversionArtifacts, recipe: Recipe

@@ -30,13 +30,16 @@ import base64
 import io
 import json
 import os
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel
@@ -55,7 +58,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="PixelForge Engine", version="0.5.0", lifespan=_lifespan)
+app = FastAPI(title="PixelForge Engine", version="0.6.0", lifespan=_lifespan)
 
 
 def _cors_origins() -> list[str]:
@@ -79,6 +82,16 @@ app.add_middleware(
 )
 
 _pipeline = ConversionPipeline()
+# 0.6.0：转换可能跑在线程池（上传接口），用锁串行化管线调用——
+# 保护 S0/S1 LRU 缓存，也避免多个 GPU 会话并发导致显存峰值。
+_PIPELINE_LOCK = threading.Lock()
+
+
+def _run_pipeline(fn, *args, **kwargs):
+    with _PIPELINE_LOCK:
+        return fn(*args, **kwargs)
+
+
 _JOBS: dict[str, dict] = {}
 _JOB_WS: dict[str, set[WebSocket]] = {}
 _AGENTS: dict[str, dict] = {}
@@ -307,7 +320,7 @@ def _convert(
     name: str = "图像",
     source_path: str | None = None,
 ) -> dict:
-    result = _pipeline.run(image, recipe, alpha)
+    result = _run_pipeline(_pipeline.run, image, recipe, alpha)
     job_id = uuid.uuid4().hex[:12]
     now = time.time()
     _JOBS[job_id] = {
@@ -705,10 +718,12 @@ async def convert_file(
     ov = json.loads(overrides) if overrides else None
     dest = UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{Path(file.filename or 'img').name}"
     dest.write_bytes(raw)
-    return _convert(
-        image, load_recipe(recipe, ov), alpha,
-        name=file.filename or "上传图片",
-        source_path=str(dest),
+    # 0.6.0：转换是 CPU 密集任务，放到线程池，避免批量上传时阻塞健康检查与 WS。
+    return await run_in_threadpool(
+        partial(
+            _convert, image, load_recipe(recipe, ov), alpha,
+            name=file.filename or "上传图片", source_path=str(dest),
+        )
     )
 
 
@@ -718,7 +733,7 @@ def stage_export(job_id: str, stage: str):
     if job is None:
         raise HTTPException(404, f"job 不存在: {job_id}")
     if stage in ("p0", "edge", "lineart"):
-        art = _pipeline._precompute(job["image"], job["recipe"])  # 已有缓存，命中即返回
+        art = _run_pipeline(_pipeline._precompute, job["image"], job["recipe"])  # 已有缓存，命中即返回
         m = {"p0": art.P0, "edge": art.E, "lineart": art.L}
         if m[stage] is None:
             raise HTTPException(404, f"该 job 无 {stage} 产物")
@@ -959,7 +974,8 @@ def rerun_region(req: RerunRegionRequest):
     mask = _decode_region_mask(req.region_png, w, h)
     delta = _validate_region_delta(req.param_delta)
     try:
-        new_result = _pipeline.rerun_region(
+        new_result = _run_pipeline(
+            _pipeline.rerun_region,
             job["image"], job["recipe"], mask, delta, result,
             expand_colors=max(0, min(16, int(req.expand_colors))),
         )
@@ -1161,7 +1177,8 @@ def job_rerun(job_id: str, req: JobRerunRequest):
     old_fill = result.fill.data.copy()
     old_palette_len = len(result.palette.colors)
     try:
-        new_result = _pipeline.rerun_region(
+        new_result = _run_pipeline(
+            _pipeline.rerun_region,
             job["image"], job["recipe"], mask, delta, result,
             expand_colors=max(0, min(16, int(req.expand_colors))),
         )
@@ -1235,7 +1252,7 @@ async def preview_ws(ws: WebSocket):
             try:
                 image = _load_image(msg["image_path"])
                 recipe = load_recipe(msg.get("recipe"), msg.get("overrides"))
-                result = _pipeline.run(image, recipe)
+                result = await run_in_threadpool(_run_pipeline, _pipeline.run, image, recipe)
                 preview = s5_post.composite_preview(result, scale=1)
                 buf = io.BytesIO()
                 preview.save(buf, format="PNG")

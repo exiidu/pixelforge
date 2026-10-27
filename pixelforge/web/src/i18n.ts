@@ -55,6 +55,7 @@ const DYN: DynRule[] = [
     `${m[1] === "正在提取线稿" ? "Extracting line art" : "Importing"} ${m[2]}/${m[3]} · ${m[4]}`],
   [/^(线稿提取完成|导入完成) (\d+)\/(\d+) 张(.*)$/, (m) =>
     `${m[1] === "线稿提取完成" ? "Line art extracted" : "Import complete"} ${m[2]}/${m[3]}${tail(m[4])}`],
+  [/^已取消批量导入 · 完成 (\d+)\/(\d+) 张$/, "Batch import cancelled · $1/$2 done"],
   [/^(\d+) 个线稿文档需选「线稿（引擎提取）」内容$/, "$1 line-art documents need the “Line art (engine)” export option"],
   [/^(\d+) 个无(墨线|源)文档$/, (m) => `${m[1]} document(s) without ${m[2] === "墨线" ? "ink" : "source image"}`],
   [/^· 跳过 (\d+) 个无(墨线|源)文档$/, (m) => `· skipped ${m[1]} document(s) without ${m[2] === "墨线" ? "ink" : "source image"}`],

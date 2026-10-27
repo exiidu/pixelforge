@@ -21,7 +21,7 @@
 - 手动：`cd pixelforge && python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700`；`cd pixelforge/web && npm run dev`。
 - 编辑器：http://localhost:5173（`?demo=1` 自动开 3 张仓库内合成测试图，供自动化验收）。
 - 引擎单独启动脚本：`start_engine.bat`；macOS/Linux 可用 `start_all.sh`。
-- 测试：`cd pixelforge && python -m pytest -q`（113 个单测）。
+- 测试：`cd pixelforge && python -m pytest -q`（115 个单测）。
 - 前端构建：`cd pixelforge/web && npx tsc --noEmit && npm run build`（dev 模式 HMR 即时生效，构建产物 dist/ 仅备查）。
 
 ## 3. 文档索引（按需读）
@@ -70,6 +70,7 @@
 | 项目文件 0.3.0（`.pixelforge` 单文档快照 + 内嵌源图；原位保存/下载回退；最近项目；`Ctrl+S`/`Ctrl+Shift+S`/`Ctrl+O`；缺失源图重定位；关闭与离开确认） | ✅ 2026-10-27 |
 | GPU 与性能 0.4.0（AI 推理 CUDA/DirectML 自动选择与回退；`/api/health` 设备状态；S2 稀疏直方图、S3 BLAS + 分块；512 格整条管线约 7.4s → 1.8s） | ✅ 2026-10-27 |
 | 可访问性 0.5.0（高对比度、全局焦点环、标签方向键/Shift+F10、调色板/图层键盘操作、状态 live region、对话框 aria-labelledby、帮助新增「可访问性」） | ✅ 2026-10-27 |
+| 批量与性能 0.6.0（批量导入取消；`/api/convert_file` 线程池化；管线调用串行锁；S0/S1 LRU 缓存上限 4） | ✅ 2026-10-27 |
 | 后续产品化 A4–H（色盲辅助、多文档工程、安装包、安全、CI 等）见 `productization-roadmap.md` | ⬜ |
 
 ## 5. 架构关键决策（改代码前必读）

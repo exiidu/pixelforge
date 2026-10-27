@@ -38,6 +38,7 @@ export async function convertFile(
   preset: string,
   size: number,
   overrides: RecipeOverrides = {},
+  signal?: AbortSignal,
 ): Promise<ConvertResponse> {
   const fd = new FormData();
   fd.append("file", file);
@@ -46,7 +47,7 @@ export async function convertFile(
   fd.append("overrides", JSON.stringify({
     ...overrides, target: { width: size, height: size, preserve_aspect: true },
   }));
-  const res = await ensureOk(await fetch("/api/convert_file", { method: "POST", body: fd }));
+  const res = await ensureOk(await fetch("/api/convert_file", { method: "POST", body: fd, signal }));
   return res.json();
 }
 
@@ -56,6 +57,7 @@ export async function convertPath(
   preset: string,
   size: number,
   overrides: RecipeOverrides = {},
+  signal?: AbortSignal,
 ): Promise<ConvertResponse> {
   const res = await ensureOk(
     await fetch("/api/convert", {
@@ -67,6 +69,7 @@ export async function convertPath(
         // preserve_aspect：尺寸=长边，按源图宽高比出网格（非正方形素材不被拉方）
         overrides: { ...overrides, target: { width: size, height: size, preserve_aspect: true } },
       }),
+      signal,
     }),
   );
   return res.json();
@@ -101,21 +104,22 @@ export interface LineartResponse {
 }
 
 /** 独立线稿提取（上传原图）：编辑器文件选择用。 */
-export async function extractLineartFile(file: File, mode = "onnx"): Promise<LineartResponse> {
+export async function extractLineartFile(file: File, mode = "onnx", signal?: AbortSignal): Promise<LineartResponse> {
   const fd = new FormData();
   fd.append("file", file);
   fd.append("mode", mode);
-  const res = await ensureOk(await fetch("/api/lineart_file", { method: "POST", body: fd }));
+  const res = await ensureOk(await fetch("/api/lineart_file", { method: "POST", body: fd, signal }));
   return res.json();
 }
 
 /** 独立线稿提取（服务器路径）：demo / 路径打开的文件用。 */
-export async function extractLineartPath(imagePath: string, mode = "onnx"): Promise<LineartResponse> {
+export async function extractLineartPath(imagePath: string, mode = "onnx", signal?: AbortSignal): Promise<LineartResponse> {
   const res = await ensureOk(
     await fetch("/api/lineart", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image_path: imagePath, mode }),
+      signal,
     }),
   );
   return res.json();

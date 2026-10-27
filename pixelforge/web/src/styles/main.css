@@ -220,6 +220,7 @@ details.pf-card > summary.pf-card-h:hover { color: var(--pf-text, inherit) }
 @keyframes pf-spin { to { transform: rotate(360deg) } }
 .pf-prog-text { font-size: 13px; font-weight: 600 }
 .pf-prog-time { margin-top: 4px }
+.pf-prog .pf-btn { margin-top: 12px }
 
 /* 导出对话框（约 4/5 界面，仿 PS 三栏） */
 .pf-export { width: 80vw; height: 82vh; max-width: none; max-height: none; padding: 0;
