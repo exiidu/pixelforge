@@ -27,6 +27,7 @@ PixelForge 是一个本地运行的图片转像素画引擎 + 像素编辑器。
 - **MCP / Agent**：19 个工具覆盖转换、批量、配方、像素编辑、填充、调色板、局部重算与导出；
   编辑器提供 Agent 控制蒙版、功能权限与 WebSocket 实时同步。
 - **产品化体验**：全局设置中心、中英双语界面、帮助中心、首次启动引导、内置示例项目。
+- **可访问性**：全键盘焦点、标签/图层/调色板键盘操作、读屏状态播报、高对比度模式。
 
 ## 环境要求
 
@@ -154,6 +155,7 @@ pixelforge/                 仓库根
 - 界面支持简体中文 / English；其他语言未提供。
 - 快捷键目前为固定映射，尚不支持自定义。
 - 引擎默认 CPU；GPU 加速目前覆盖 ONNX 推理（CUDA / DirectML），S0–S5 仍为 CPU（大网格已做稀疏与分块优化）。
+- 画布绘制仍以指针为主；键盘可完成工具切换、标签/图层/调色板导航与弹窗操作。
 - 项目文件为单文档快照；多文档工程与安装包仍在路线图（A5 / E）中。
 
 ## 许可
@@ -183,6 +185,7 @@ An MCP server exposes the engine and editor to AI agents through standard tools.
 - Optional AI: line-art extraction (Informative Drawings) and matting (U²-Net / U²-NetP).
 - MCP server with 19 tools, agent control overlay, feature permissions, and live WebSocket sync.
 - Settings center, Chinese/English UI, help center, first-run onboarding, built-in sample project.
+- Accessibility: keyboard focus throughout, keyboard-operable tabs/layers/palette, screen-reader live status, and a high-contrast mode.
 
 ### Requirements
 

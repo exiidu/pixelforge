@@ -23,9 +23,9 @@
       <button id="export" class="pf-btn">导出</button>
     </div>
 
-    <dialog id="newdlg" class="pf-dlg">
+    <dialog id="newdlg" class="pf-dlg" aria-labelledby="new-title">
       <div class="pf-dlg-body">
-        <h3>新建画布</h3>
+        <h3 id="new-title">新建画布</h3>
         <div class="pf-dlg-row">
           <label>宽 <input id="new-w" type="number" min="8" max="256" step="1" value="32" /> 格</label>
           <label>高 <input id="new-h" type="number" min="8" max="256" step="1" value="32" /> 格</label>
@@ -38,9 +38,9 @@
       </div>
     </dialog>
 
-    <dialog id="restoredlg" class="pf-dlg">
+    <dialog id="restoredlg" class="pf-dlg" aria-labelledby="restore-title">
       <div class="pf-dlg-body">
-        <h3>恢复上次会话</h3>
+        <h3 id="restore-title">恢复上次会话</h3>
         <p class="pf-mute" id="restore-info">发现自动保存。</p>
         <p class="pf-mute">恢复后配方、图层与手改原样保留；上传的源图也会一并恢复（可直接重转换/出引擎线稿）。撤销历史不恢复。</p>
         <div class="pf-dlg-btns">
@@ -50,9 +50,9 @@
       </div>
     </dialog>
 
-    <dialog id="projectsdlg" class="pf-dlg pf-projects">
+    <dialog id="projectsdlg" class="pf-dlg pf-projects" aria-labelledby="projects-title">
       <div class="pf-dlg-body">
-        <h3>项目</h3>
+        <h3 id="projects-title">项目</h3>
         <p class="pf-mute">项目文件（.pixelforge）包含当前文档、配方、图层、手改与源图；保存后可从最近项目继续。</p>
         <div class="pf-project-list" id="recent-projects"></div>
         <div class="pf-dlg-btns">
@@ -63,7 +63,7 @@
       </div>
     </dialog>
 
-    <dialog id="confirmdlg" class="pf-dlg pf-confirm">
+    <dialog id="confirmdlg" class="pf-dlg pf-confirm" aria-labelledby="confirm-title">
       <div class="pf-dlg-body">
         <h3 id="confirm-title">确认</h3>
         <p class="pf-confirm-text" id="confirm-message"></p>
@@ -74,7 +74,7 @@
       </div>
     </dialog>
 
-    <div class="pf-tabs" id="tabs" aria-label="打开的文档"></div>
+    <div class="pf-tabs" id="tabs" role="tablist" aria-label="打开的文档"></div>
 
     <div class="pf-body">
       <aside class="pf-side" aria-label="工具面板">
@@ -169,7 +169,7 @@
 
         <div class="pf-card" id="tools-card">
           <div class="pf-card-h">编辑工具</div>
-          <div class="pf-toolgrid">
+          <div class="pf-toolgrid" role="toolbar" aria-label="编辑工具">
             <button class="pf-tile" id="tool-move"></button>
             <button class="pf-tile" id="tool-select"></button>
             <button class="pf-tile" id="tool-lasso"></button>
@@ -216,7 +216,7 @@
           </div>
         </div>
         <div class="pf-canvaswrap" id="canvaswrap" hidden>
-          <canvas id="canvas" aria-label="像素画编辑画布"></canvas>
+          <canvas id="canvas" aria-label="像素画编辑画布" aria-describedby="stat-doc"></canvas>
         </div>
       </main>
 
@@ -327,7 +327,7 @@
       </button>
       <button id="settings-btn" class="pf-btn" title="全局设置">设置</button>
       <button id="help-btn" class="pf-btn" title="使用指南 (F1)">帮助</button>
-      <span id="stat-doc">—</span>
+      <span id="stat-doc" role="status" aria-live="polite" aria-atomic="true">—</span>
       <span id="agent-sync" class="pf-agent-sync" hidden></span>
       <div class="pf-spacer"></div>
       <button class="pf-btn" id="zoom-out" aria-label="缩小">−</button>
@@ -338,7 +338,7 @@
         描图 <input type="range" id="underlay" min="0" max="100" step="5" value="0">
       </span>
       <button class="pf-btn" id="compare" aria-pressed="false">按住对比源图</button>
-      <span class="mono" id="stat-cursor">—</span>
+      <span class="mono" id="stat-cursor" aria-live="off">—</span>
     </div>
   </div>
 
@@ -355,10 +355,10 @@
   </div>
 
   <!-- 全局设置中心（含 MCP / Agent 管理） -->
-  <dialog id="settingsdlg" class="pf-settings">
+  <dialog id="settingsdlg" class="pf-settings" aria-labelledby="settings-title">
     <div class="pf-settings-head">
       <div class="pf-settings-title">
-        <h3>设置</h3>
+        <h3 id="settings-title">设置</h3>
         <p class="pf-mute">PixelForge · 全局设置</p>
       </div>
       <label class="pf-settings-search">
@@ -410,14 +410,18 @@
           <div class="pf-set-row" data-search="强调色 accent 颜色 color">
             <div class="pf-set-meta"><b>强调色</b><span>按钮、选中态、Agent 状态的强调颜色</span></div>
             <div class="pf-accent-picks" id="set-accent">
-              <button type="button" data-accent="green" title="森林绿"><i></i></button>
-              <button type="button" data-accent="blue" title="海蓝"><i></i></button>
-              <button type="button" data-accent="amber" title="琥珀"><i></i></button>
+              <button type="button" data-accent="green" title="森林绿" aria-label="森林绿"><i></i></button>
+              <button type="button" data-accent="blue" title="海蓝" aria-label="海蓝"><i></i></button>
+              <button type="button" data-accent="amber" title="琥珀" aria-label="琥珀"><i></i></button>
             </div>
           </div>
           <div class="pf-set-row" data-search="动效 motion animation 减少">
             <div class="pf-set-meta"><b>减少动效</b><span>关闭弹窗、脉冲、过渡动画</span></div>
             <label class="pf-set-check"><input id="set-reduce-motion" type="checkbox" /> 开启</label>
+          </div>
+          <div class="pf-set-row" data-search="高对比度 contrast 无障碍 accessibility 低视力">
+            <div class="pf-set-meta"><b>高对比度</b><span>加强文字、边框与焦点环对比，便于低视力使用</span></div>
+            <label class="pf-set-check"><input id="set-high-contrast" type="checkbox" /> 开启</label>
           </div>
         </section>
 
@@ -598,14 +602,14 @@
   <script type="module" src="/src/main.ts"></script>
 
   <!-- 转换进度（重转换时中央弹出） -->
-  <dialog id="progd" class="pf-prog">
+  <dialog id="progd" class="pf-prog" aria-label="转换进度">
     <div class="pf-prog-spin"></div>
     <div class="pf-prog-text" id="prog-text">正在转换…</div>
     <div class="pf-prog-time pf-val mono" id="prog-time">0.0s</div>
   </dialog>
 
   <!-- 导出（约 4/5 界面，仿 PS 导出窗三栏） -->
-  <dialog id="exportdlg" class="pf-export">
+  <dialog id="exportdlg" class="pf-export" aria-label="导出">
     <div class="pf-export-inner">
       <aside class="pf-export-list">
         <label class="pf-export-all"><input type="checkbox" id="exp-all" checked> 全选</label>

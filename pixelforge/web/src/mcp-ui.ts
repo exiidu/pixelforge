@@ -451,6 +451,13 @@ export function mountMcpUi(opts: { demo?: boolean } = {}): void {
     }));
   });
 
+  // 蒙版内只有一个可聚焦按钮：Tab 循环保持在释放按钮上
+  document.getElementById("agent-overlay")?.addEventListener("keydown", (event) => {
+    if ((event as KeyboardEvent).key !== "Tab") return;
+    event.preventDefault();
+    document.getElementById("agent-release")?.focus();
+  });
+
   // 供未来 MCP-3B 或外部脚本通过事件驱动蒙版
   document.addEventListener("pf:agent-control", ((event: Event) => {
     const detail = (event as CustomEvent<{ active?: boolean } & AgentControlOptions>).detail || {};

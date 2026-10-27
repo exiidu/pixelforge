@@ -15,6 +15,7 @@ export interface AppSettings {
   theme: ThemeMode;
   accent: AccentColor;
   reduceMotion: boolean;
+  highContrast: boolean;
   defaultPreset: DefaultPreset;
   defaultSize: number;
   showGrid: boolean;
@@ -28,6 +29,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
   accent: "green",
   reduceMotion: false,
+  highContrast: false,
   defaultPreset: "photo",
   defaultSize: 64,
   showGrid: true,
@@ -61,6 +63,7 @@ function normalize(raw: unknown): AppSettings {
     theme,
     accent,
     reduceMotion: source.reduceMotion === true,
+    highContrast: source.highContrast === true,
     defaultPreset: preset,
     defaultSize: clampSize(source.defaultSize),
     showGrid: source.showGrid !== false,
@@ -91,6 +94,8 @@ function applyAppearance(): void {
   root.style.colorScheme = current.theme === "system" ? "" : current.theme;
   root.dataset.accent = current.accent;
   root.classList.toggle("pf-reduce-motion", current.reduceMotion);
+  if (current.highContrast) root.dataset.contrast = "high";
+  else delete root.dataset.contrast;
   setLocale(current.language);
 }
 
@@ -125,17 +130,23 @@ function syncControls(): void {
   if (grid) grid.checked = current.showGrid;
   const motion = $<HTMLInputElement>("set-reduce-motion");
   if (motion) motion.checked = current.reduceMotion;
+  const contrast = $<HTMLInputElement>("set-high-contrast");
+  if (contrast) contrast.checked = current.highContrast;
   const notify = $<HTMLInputElement>("set-agent-notify");
   if (notify) notify.checked = current.agentNotifications;
   for (const btn of document.querySelectorAll<HTMLElement>("#set-accent [data-accent]")) {
-    btn.classList.toggle("sel", btn.dataset.accent === current.accent);
+    const on = btn.dataset.accent === current.accent;
+    btn.classList.toggle("sel", on);
+    btn.setAttribute("aria-pressed", String(on));
   }
 }
 
 function showTab(tab: string): void {
   userTab = tab;
   for (const btn of document.querySelectorAll<HTMLElement>("#settings-nav [data-tab]")) {
-    btn.classList.toggle("active", btn.dataset.tab === tab);
+    const on = btn.dataset.tab === tab;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-current", on ? "true" : "false");
   }
   for (const pane of document.querySelectorAll<HTMLElement>("#settings-panes [data-pane]")) {
     pane.hidden = pane.dataset.pane !== tab;
@@ -339,6 +350,10 @@ export function mountSettings(): void {
   });
   $<HTMLInputElement>("set-reduce-motion")?.addEventListener("change", (event) => {
     current = { ...current, reduceMotion: (event.target as HTMLInputElement).checked };
+    applyAll(false);
+  });
+  $<HTMLInputElement>("set-high-contrast")?.addEventListener("change", (event) => {
+    current = { ...current, highContrast: (event.target as HTMLInputElement).checked };
     applyAll(false);
   });
   $<HTMLInputElement>("set-agent-notify")?.addEventListener("change", (event) => {

@@ -427,4 +427,7 @@ export const EN: Record<string, string> = {
   "AI 运行设备": "AI device",
   "线稿 / 抠图推理使用的设备与 Provider": "Device and provider used for line art / matting inference",
   "GPU 需安装 onnxruntime-gpu（CUDA）或 onnxruntime-directml，并用环境变量 PIXELFORGE_DEVICE=auto|cuda|dml|cpu 指定；不可用时自动回退 CPU。": "For GPU inference install onnxruntime-gpu (CUDA) or onnxruntime-directml and set PIXELFORGE_DEVICE=auto|cuda|dml|cpu; it falls back to CPU automatically.",
+  "高对比度": "High contrast",
+  "加强文字、边框与焦点环对比，便于低视力使用": "Stronger text, border, and focus-ring contrast for low vision",
+  "转换进度": "Conversion progress",
 };

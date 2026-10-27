@@ -66,6 +66,12 @@ function showTabMenu(x: number, y: number, index: number): void {
   };
   window.addEventListener("pointerdown", close);
   window.addEventListener("blur", () => menu.remove(), { once: true });
+  menu.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    menu.remove();
+    window.removeEventListener("pointerdown", close);
+  });
+  menu.querySelector<HTMLButtonElement>("button")?.focus();
 }
 
 export function mountTabs(container: HTMLElement): void {
@@ -87,6 +93,7 @@ export function mountTabs(container: HTMLElement): void {
       tab.className = "pf-tab" + (i === activeIndex ? " active" : "") + (doc.dirty ? " dirty" : "");
       tab.setAttribute("role", "tab");
       tab.setAttribute("aria-selected", i === activeIndex ? "true" : "false");
+      tab.tabIndex = i === activeIndex ? 0 : -1;
       tab.draggable = true;
       tab.dataset.index = String(i);
 
@@ -99,6 +106,7 @@ export function mountTabs(container: HTMLElement): void {
       close.className = "close";
       close.textContent = "×";
       close.setAttribute("aria-label", `关闭 ${doc.name}`);
+      close.tabIndex = i === activeIndex ? 0 : -1;
       close.addEventListener("click", (e) => {
         e.stopPropagation();
         void closeTabWithConfirm(i);
@@ -107,6 +115,33 @@ export function mountTabs(container: HTMLElement): void {
       tab.addEventListener("click", () => setActive(i));
       tab.addEventListener("auxclick", (e) => {
         if (e.button === 1) void closeTabWithConfirm(i); // 中键关闭
+      });
+      // 0.5.0：方向键在标签间移动焦点（roving tabindex），Enter/Space 激活
+      tab.addEventListener("keydown", (e) => {
+        if (e.target !== tab) return;
+        const n = docs.length;
+        let to = -1;
+        if (e.key === "ArrowRight") to = (i + 1) % n;
+        else if (e.key === "ArrowLeft") to = (i - 1 + n) % n;
+        else if (e.key === "Home") to = 0;
+        else if (e.key === "End") to = n - 1;
+        if (to >= 0) {
+          e.preventDefault();
+          setActive(to);
+          requestAnimationFrame(() => {
+            container.querySelector<HTMLElement>(`.pf-tab[data-index="${to}"]`)?.focus();
+          });
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setActive(i);
+          requestAnimationFrame(() => {
+            container.querySelector<HTMLElement>(`.pf-tab[data-index="${i}"]`)?.focus();
+          });
+        } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+          e.preventDefault();
+          const rect = tab.getBoundingClientRect();
+          showTabMenu(rect.left, rect.bottom, i);
+        }
       });
       tab.addEventListener("contextmenu", (e) => {
         e.preventDefault();
@@ -154,6 +189,8 @@ export function mountLayers(container: HTMLElement): void {
   const redraw = () => {
     const doc = activeDoc();
     const sel = getState().selection;
+    const active = document.activeElement as HTMLElement | null;
+    const focusedLayer = active && container.contains(active) ? active.dataset.layerId : undefined;
     container.textContent = "";
     if (!doc) return;
 
@@ -184,6 +221,9 @@ export function mountLayers(container: HTMLElement): void {
       row.className =
         "pf-layer" + (l.id === doc.activeLayerId ? " active" : "") + (l.visible ? "" : " hidden");
       row.setAttribute("role", "button");
+      row.tabIndex = 0;
+      row.dataset.layerId = l.id;
+      row.setAttribute("aria-pressed", String(l.id === doc.activeLayerId));
       row.title = isBase
         ? `${l.name}（基础层：含引擎转换内容，不可删除）`
         : l.bg
@@ -237,7 +277,16 @@ export function mountLayers(container: HTMLElement): void {
         if (l.id === doc.activeLayerId) return;
         container.dispatchEvent(new CustomEvent("pf:set-active-layer", { bubbles: true, detail: l.id }));
       });
+      row.addEventListener("keydown", (e) => {
+        if (e.target !== row || (e.key !== "Enter" && e.key !== " ")) return;
+        e.preventDefault();
+        if (l.id === doc.activeLayerId) return;
+        container.dispatchEvent(new CustomEvent("pf:set-active-layer", { bubbles: true, detail: l.id }));
+      });
       container.appendChild(row);
+    }
+    if (focusedLayer) {
+      container.querySelector<HTMLElement>(`[data-layer-id="${focusedLayer}"]`)?.focus();
     }
   };
   subscribe(redraw);
@@ -345,6 +394,8 @@ export function mountPalette(
 
   const mountCustom = () => {
     if (!customEl) return;
+    const active = document.activeElement as HTMLElement | null;
+    const focusedHex = active && customEl.contains(active) ? active.dataset.hex : undefined;
     const { customColors, paletteSort } = getState();
     customEl.textContent = "";
     const ordered = sortCustom(customColors, paletteSort);
@@ -359,23 +410,29 @@ export function mountPalette(
     const curHex = doc ? hexOfRgb(doc.palette[getState().colorIndex] ?? [0, 0, 0]) : "";
     for (const hex of ordered) {
       const rgb = hexToRgb(hex)!;
-      const sw = document.createElement("div");
+      const sw = document.createElement("button");
+      sw.type = "button";
       sw.dataset.hex = hex;
       sw.style.background = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
       sw.title = `${hex} · 左键选用 · 右键删除`;
+      sw.setAttribute("aria-label", sw.title);
+      sw.setAttribute("aria-pressed", String(hex === curHex));
       if (hex === curHex) sw.classList.add("sel");
-      sw.addEventListener("pointerdown", (e) => {
-        if (e.button === 0) {
-          document.dispatchEvent(new CustomEvent("pf:custom-color", { detail: { rgb } }));
-        }
+      sw.addEventListener("click", () => {
+        document.dispatchEvent(new CustomEvent("pf:custom-color", { detail: { rgb } }));
       });
       customEl.appendChild(sw);
+    }
+    if (focusedHex) {
+      customEl.querySelector<HTMLElement>(`[data-hex="${focusedHex}"]`)?.focus();
     }
   };
 
   const redraw = () => {
     const doc = activeDoc();
     const { colorIndex, paletteSort } = getState();
+    const active = document.activeElement as HTMLElement | null;
+    const focusedIdx = active && container.contains(active) ? active.dataset.idx : undefined;
 
     mountCustom();
     hideCtxMenu();
@@ -410,14 +467,21 @@ export function mountPalette(
     const total = doc.fill.length;
     for (const [idx, n] of order) {
       const c = doc.palette[idx] ?? [255, 0, 255];
-      const sw = document.createElement("div");
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.dataset.idx = String(idx);
       sw.style.background = `rgb(${c[0]},${c[1]},${c[2]})`;
       sw.title = `${hexOfRgb(c)} · ${((100 * n) / total).toFixed(1)}%`;
+      sw.setAttribute("aria-label", sw.title);
+      sw.setAttribute("aria-pressed", String(idx === colorIndex));
       if (idx === colorIndex) sw.classList.add("sel");
       sw.addEventListener("click", () => {
         document.dispatchEvent(new CustomEvent("pf:pick-color", { detail: idx }));
       });
       container.appendChild(sw);
+    }
+    if (focusedIdx !== undefined) {
+      container.querySelector<HTMLElement>(`[data-idx="${focusedIdx}"]`)?.focus();
     }
   };
   subscribe(redraw);
@@ -648,6 +712,7 @@ export function mountTools(): void {
     if (el) {
       el.innerHTML = ICONS[id.replace("tool-", "")] ?? "";
       el.title = tip;
+      el.setAttribute("aria-label", tip);
     }
   }
   for (const id of ["btn-undo", "btn-redo"]) {
@@ -660,12 +725,21 @@ export function mountTools(): void {
   const brushes = [1, 2, 3, 4];
   const redraw = () => {
     const { tool, symmetry, brushSize } = getState();
-    for (const [t, id] of TOOLS)
-      document.getElementById(id)?.classList.toggle("active", tool === t);
-    for (const [s, id] of syms)
-      document.getElementById(id)?.classList.toggle("active", symmetry === s);
-    for (const b of brushes)
-      document.getElementById(`brush-${b}`)?.classList.toggle("active", brushSize === b);
+    for (const [t, id] of TOOLS) {
+      const el = document.getElementById(id);
+      el?.classList.toggle("active", tool === t);
+      el?.setAttribute("aria-pressed", String(tool === t));
+    }
+    for (const [s, id] of syms) {
+      const el = document.getElementById(id);
+      el?.classList.toggle("active", symmetry === s);
+      el?.setAttribute("aria-pressed", String(symmetry === s));
+    }
+    for (const b of brushes) {
+      const el = document.getElementById(`brush-${b}`);
+      el?.classList.toggle("active", brushSize === b);
+      el?.setAttribute("aria-pressed", String(brushSize === b));
+    }
     const doc = activeDoc();
     const u = document.getElementById("btn-undo") as HTMLButtonElement | null;
     const r = document.getElementById("btn-redo") as HTMLButtonElement | null;

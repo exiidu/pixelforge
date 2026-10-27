@@ -219,6 +219,32 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "accessibility",
+    title: { zh: "可访问性", en: "Accessibility" },
+    blocks: [
+      { kind: "p", text: {
+        zh: "所有按钮、标签、图层行与调色板色块都可用 Tab 聚焦，Enter / 空格 激活；焦点有高亮环。",
+        en: "Every button, tab, layer row, and palette swatch can be focused with Tab and activated with Enter / Space; the focus ring is always visible.",
+      } },
+      { kind: "p", text: {
+        zh: "焦点在标签栏时用 ← / → / Home / End 切换文档；Shift+F10 或菜单键打开标签菜单。",
+        en: "With focus in the tab bar, use ← / → / Home / End to switch documents; Shift+F10 or the Menu key opens the tab menu.",
+      } },
+      { kind: "p", text: {
+        zh: "弹窗按 Esc 关闭；关闭后焦点回到打开它之前的位置。",
+        en: "Dialogs close with Esc, and focus returns to where it was before opening.",
+      } },
+      { kind: "p", text: {
+        zh: "低视力用户可在「设置 → 外观 → 高对比度」加强文字、边框与焦点环对比。",
+        en: "For low vision, enable “Settings → Appearance → High contrast” for stronger text, border, and focus-ring contrast.",
+      } },
+      { kind: "p", text: {
+        zh: "状态栏使用读屏实时区域，转换、保存与错误提示会被朗读；画布本身仍以指针操作为主，快捷键见「工具与快捷键」。",
+        en: "The status bar is a live region, so conversion, save, and error messages are announced. The canvas itself is pointer-driven; see “Tools & shortcuts” for keys.",
+      } },
+    ],
+  },
+  {
     id: "faq",
     title: { zh: "常见问题", en: "FAQ" },
     blocks: [
