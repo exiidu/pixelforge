@@ -42,6 +42,7 @@ import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
@@ -59,7 +60,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="PixelForge Engine", version="0.7.0", lifespan=_lifespan)
+app = FastAPI(title="PixelForge Engine", version="0.8.0", lifespan=_lifespan)
 
 
 def _cors_origins() -> list[str]:
@@ -103,6 +104,8 @@ UPLOAD_DIR = Path(__file__).resolve().parents[2] / ".cache" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 SESSION_PATH = Path(__file__).resolve().parents[2] / "web" / "session.json"
 SESSION_MAX_BYTES = 8_000_000  # 0.7.0：会话上限，拒绝超大 JSON 写入
+# 0.8.0：前端构建产物目录；存在时由引擎直接托管，便携版无需 Node。
+WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 # 0.7.0：Agent 操作审计（仅记录带 X-PixelForge-Agent 的写请求）
 _AUDIT_MAX = 200
@@ -651,6 +654,7 @@ def health():
         "jobs_cached": len(_JOBS),
         "max_jobs": _MAX_JOBS,
         "ws_subscribers": sum(len(v) for v in _JOB_WS.values()),
+        "web_dist": (WEB_DIST / "index.html").is_file(),
     }
 
 
@@ -1313,3 +1317,8 @@ async def preview_ws(ws: WebSocket):
                 await ws.send_json({"error": str(e)})
     except WebSocketDisconnect:
         return
+
+
+# 0.8.0：存在前端构建产物时由引擎直接托管（API / WS 路由已先注册，挂载必须在最后）。
+if (WEB_DIST / "index.html").is_file():
+    app.mount("/", StaticFiles(directory=str(WEB_DIST), html=True), name="web")

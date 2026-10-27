@@ -17,11 +17,12 @@
 
 ## 2. 一键运行
 
-- **`start_all.bat`**（仓库根）：双击 = 引擎(:8700) + 前端(:5173) + 就绪后自动开浏览器；路径相对脚本，仓库可移动。
+- **`start_all.bat`**（仓库根）：双击 = 引擎(:8700) + 前端；有 `web/dist` 时只启动引擎并打开 :8700，否则启动 Vite(:5173)。路径相对脚本，仓库可移动。
 - 手动：`cd pixelforge && python -m uvicorn engine.server.api:app --host 127.0.0.1 --port 8700`；`cd pixelforge/web && npm run dev`。
-- 编辑器：http://localhost:5173（`?demo=1` 自动开 3 张仓库内合成测试图，供自动化验收）。
+- 编辑器：开发 http://localhost:5173；单进程/便携包 http://127.0.0.1:8700（引擎托管 `web/dist`）。`?demo=1` 自动开 3 张合成测试图。
 - 引擎单独启动脚本：`start_engine.bat`；macOS/Linux 可用 `start_all.sh`。
-- 测试：`cd pixelforge && python -m pytest -q`（120 个单测）。
+- 便携包：`python pixelforge/tools/build_release.py` → `dist/pixelforge-<version>-portable.zip`。
+- 测试：`cd pixelforge && python -m pytest -q`（122 个单测）。
 - 前端构建：`cd pixelforge/web && npx tsc --noEmit && npm run build`（dev 模式 HMR 即时生效，构建产物 dist/ 仅备查）。
 
 ## 3. 文档索引（按需读）
@@ -72,7 +73,8 @@
 | 可访问性 0.5.0（高对比度、全局焦点环、标签方向键/Shift+F10、调色板/图层键盘操作、状态 live region、对话框 aria-labelledby、帮助新增「可访问性」） | ✅ 2026-10-27 |
 | 批量与性能 0.6.0（批量导入取消；`/api/convert_file` 线程池化；管线调用串行锁；S0/S1 LRU 缓存上限 4） | ✅ 2026-10-27 |
 | 安全与 Agent 0.7.0（MCP 请求带 Agent 标识；写操作审计与设置页「最近操作」；会话 8MB 上限、Agent/文件名长度与权限表上限） | ✅ 2026-10-27 |
-| 后续产品化 A4–H（色盲辅助、多文档工程、安装包、token 等）见 `productization-roadmap.md` | ⬜ |
+| 分发 0.8.0（引擎托管 `web/dist` 单进程 :8700；启动脚本自动分流；`tools/build_release.py` 便携 zip；`web_dist` 健康状态） | ✅ 2026-10-27 |
+| 后续产品化 A4–H（色盲辅助、多文档工程、免 Python 安装包、token 等）见 `productization-roadmap.md` | ⬜ |
 
 ## 5. 架构关键决策（改代码前必读）
 

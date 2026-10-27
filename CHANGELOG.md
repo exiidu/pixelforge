@@ -2,6 +2,17 @@
 
 本项目遵循语义化版本；日期为发布日。
 
+## 0.8.0 — 2026-10-27
+
+### Added
+- 单进程运行：存在 `web/dist` 时引擎直接托管前端，`http://127.0.0.1:8700/` 即可使用编辑器，无需 Node/Vite。
+- `start_all.bat` / `start_all.sh` 自动分流：有构建产物只启动引擎；没有则回退 Vite 开发服务器。
+- `pixelforge/tools/build_release.py`：构建便携包 `dist/pixelforge-<version>-portable.zip`（引擎 + 前端 dist + 启动脚本，排除模型与缓存）。
+
+### Changed
+- 健康检查新增 `web_dist` 状态；README 增加便携包与单进程说明。
+- 便携包仍需要 Python 环境；免 Python 安装包仍在路线图。
+
 ## 0.7.0 — 2026-10-27
 
 ### Added

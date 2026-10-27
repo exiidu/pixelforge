@@ -33,7 +33,7 @@ PixelForge 是一个本地运行的图片转像素画引擎 + 像素编辑器。
 
 - Windows 10/11（当前主要在 Windows 验证；引擎与前端本身跨平台）
 - Python 3.11+
-- Node.js 20+（Vite 6；CI 使用 Node 20）
+- Node.js 20+（仅开发/构建前端；便携版不需要）
 - 可选：`onnxruntime` 与模型权重（AI 线稿/抠图）
 
 ## 快速开始
@@ -62,6 +62,8 @@ start_all.bat
 macOS / Linux 使用 `bash start_all.sh`。
 
 脚本会自动启动引擎（`127.0.0.1:8700`）与前端（`localhost:5173`）并打开浏览器。
+若 `pixelforge/web/dist` 已存在（构建过前端），`start_all.bat` 会只启动引擎并直接打开
+`http://127.0.0.1:8700/`，不需要 Node。
 手动启动（在仓库根目录执行）：
 
 ```bash
@@ -85,6 +87,23 @@ cd pixelforge/web && npm run dev
 不要同时安装 `onnxruntime` 与 GPU 版（导入名相同，二者只能保留一个）。
 
 本机 CPU 实测（2048×1536 输入，photo 配方）：512 格整条管线约 **1.8s**（0.3.0 约 7.4s），其中 S2 约 1.0s、S3 约 0.6s；64 格约 0.8s。GPU 主要加速 AI 推理（线稿 CPU 约 3s，GPU 通常百毫秒级）。
+
+## 便携包（单进程）
+
+```bash
+python pixelforge/tools/build_release.py
+```
+
+生成 `dist/pixelforge-<version>-portable.zip`（引擎 + 前端 dist + 启动脚本；不含模型与缓存）。
+解压后仍需 Python 环境：
+
+```bash
+python -m pip install -e "pixelforge"
+python pixelforge/tools/download_models.py   # 可选：下载 AI 模型
+start_all.bat                                # 或 bash start_all.sh
+```
+
+前端由引擎在 `http://127.0.0.1:8700/` 直接托管，不需要 Node。免 Python 的安装包仍在路线图中。
 
 ## MCP 接入
 
@@ -120,7 +139,7 @@ cd pixelforge/web && npm run dev
 以下命令均从仓库根目录执行：
 
 ```bash
-# 后端测试（当前 120 个用例）
+# 后端测试（当前 122 个用例）
 cd pixelforge && python -m pytest -q
 
 # 前端类型检查与构建
@@ -191,7 +210,7 @@ An MCP server exposes the engine and editor to AI agents through standard tools.
 ### Requirements
 
 - Windows 10/11 (primary target; engine and web are cross-platform)
-- Python 3.11+, Node.js 20+ (Vite 6; CI uses Node 20)
+- Python 3.11+, Node.js 20+ (Node is only needed to build the web UI; the portable build does not)
 - Optional: `onnxruntime` plus model weights for AI features; CUDA or DirectML GPU inference is also supported
 
 ### Quick start
@@ -220,6 +239,10 @@ Open http://localhost:5173.
 For GPU inference install `pixelforge[gpu]` (CUDA) or `pixelforge[directml]`, then set
 `PIXELFORGE_DEVICE=auto|cuda|dml|cpu`. Do not install `onnxruntime` and its GPU variant side by side.
 The engine reports the active device under Settings → Engine.
+
+Portable build: `python pixelforge/tools/build_release.py` produces
+`dist/pixelforge-<version>-portable.zip`. The engine then serves `web/dist` at
+`http://127.0.0.1:8700/`, so Node is not required at runtime.
 
 ### MCP
 
