@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from engine import paths
 from engine.server import api
@@ -46,6 +47,14 @@ def test_http_error_envelope():
     body = json.loads(response.body)
     assert response.status_code == 404
     assert body["error"] == {"code": "http_404", "message": "无自动保存"}
+
+
+def test_unmatched_route_uses_error_envelope():
+    # 0.10.0：404 走 Starlette 基类，路由不存在也返回统一封包
+    assert StarletteHTTPException in api.app.exception_handlers
+    response = asyncio.run(api._http_error(None, StarletteHTTPException(404, "Not Found")))
+    assert response.status_code == 404
+    assert json.loads(response.body)["error"]["code"] == "http_404"
 
 
 def test_validation_error_envelope():

@@ -50,11 +50,14 @@ const DYN: DynRule[] = [
   [/^已把索引 (\d+) 替换为 (.+)（可撤销）$/, "Replaced index $1 with $2 (undoable)"],
   [/^索引 (\d+) 已是 (.+)$/, "Index $1 is already $2"],
   [/^已拷贝 (.+)$/, "Copied $1"],
-  [/^(.+)：未找到支持的图片$/, "$1: no supported images found"],
+  [/^(.+)：未找到支持的图片$/, (m) => `${translateText(m[1]) ?? m[1]}: no supported images found`],
   [/^(正在提取线稿|正在导入) (\d+)\/(\d+) · (.+)$/, (m) =>
     `${m[1] === "正在提取线稿" ? "Extracting line art" : "Importing"} ${m[2]}/${m[3]} · ${m[4]}`],
   [/^(线稿提取完成|导入完成) (\d+)\/(\d+) 张(.*)$/, (m) =>
     `${m[1] === "线稿提取完成" ? "Line art extracted" : "Import complete"} ${m[2]}/${m[3]}${tail(m[4])}`],
+  [/^已重命名为「(.+)」$/, "Renamed to “$1”"],
+  [/^色板可辨性：(\d+) 组低于 ([\d.]+) · 最小 ΔE ([\d.]+)（(.+) ↔ (.+)）$/, "Palette contrast: $1 pair(s) below $2 · min ΔE $3 ($4 ↔ $5)"],
+  [/^色板可辨性：通过 · 最小 ΔE ([\d.]+)$/, "Palette contrast: pass · min ΔE $1"],
   [/^已取消批量导入 · 完成 (\d+)\/(\d+) 张$/, "Batch import cancelled · $1/$2 done"],
   [/^(\d+) 个线稿文档需选「线稿（引擎提取）」内容$/, "$1 line-art documents need the “Line art (engine)” export option"],
   [/^(\d+) 个无(墨线|源)文档$/, (m) => `${m[1]} document(s) without ${m[2] === "墨线" ? "ink" : "source image"}`],

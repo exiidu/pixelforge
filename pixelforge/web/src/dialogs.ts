@@ -8,8 +8,18 @@ interface ConfirmOptions {
   cancelText?: string;
 }
 
+interface PromptOptions {
+  title?: string;
+  label: string;
+  value?: string;
+  okText?: string;
+  cancelText?: string;
+  maxLength?: number;
+}
+
 let mounted = false;
 let pending: ((value: boolean) => void) | null = null;
+let pendingPrompt: ((value: string | null) => void) | null = null;
 
 function el<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
@@ -20,6 +30,42 @@ function settle(value: boolean): void {
   pending = null;
   el<HTMLDialogElement>("confirmdlg")?.close();
   resolve?.(value);
+}
+
+function settlePrompt(value: string | null): void {
+  const resolve = pendingPrompt;
+  pendingPrompt = null;
+  el<HTMLDialogElement>("promptdlg")?.close();
+  resolve?.(value);
+}
+
+/** 0.10.0：单行输入框（重命名等）；Enter 确认、Esc/背景点击取消。 */
+export function promptDialog(opts: PromptOptions): Promise<string | null> {
+  const dlg = el<HTMLDialogElement>("promptdlg");
+  const input = el<HTMLInputElement>("prompt-input");
+  if (!dlg || !input) return Promise.resolve(null);
+  if (pendingPrompt) settlePrompt(null);
+
+  const title = el("prompt-title");
+  const label = el("prompt-label");
+  const ok = el("prompt-ok");
+  const cancel = el("prompt-cancel");
+  if (title) title.textContent = opts.title ?? t("确认");
+  if (label) label.textContent = opts.label;
+  if (ok) ok.textContent = opts.okText ?? t("确定");
+  if (cancel) cancel.textContent = opts.cancelText ?? t("取消");
+  input.maxLength = opts.maxLength ?? 60;
+  input.value = opts.value ?? "";
+
+  if (dlg.open) dlg.close();
+  dlg.showModal();
+  requestAnimationFrame(() => {
+    input.focus();
+    input.select();
+  });
+  return new Promise((resolve) => {
+    pendingPrompt = resolve;
+  });
 }
 
 /** 打开确认框；重复调用会把上一次视为取消。 */
@@ -77,4 +123,21 @@ export function mountDialogs(): void {
   });
   el("confirm-ok")?.addEventListener("click", () => settle(true));
   el("confirm-cancel")?.addEventListener("click", () => settle(false));
+
+  const prompt = el<HTMLDialogElement>("promptdlg");
+  const promptInput = el<HTMLInputElement>("prompt-input");
+  prompt?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    settlePrompt(null);
+  });
+  prompt?.addEventListener("click", (event) => {
+    if (event.target === prompt) settlePrompt(null);
+  });
+  el("prompt-ok")?.addEventListener("click", () => settlePrompt(promptInput?.value.trim() || null));
+  el("prompt-cancel")?.addEventListener("click", () => settlePrompt(null));
+  promptInput?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    settlePrompt(promptInput.value.trim() || null);
+  });
 }

@@ -12,7 +12,7 @@ import {
 import { mountLayers, mountPalette, mountTabs, mountTools, mountHistory, mountColorLib } from "./panels";
 import { mountMcpUi, setAgentControl, openMcpManager, getMcpAgents } from "./mcp-ui";
 import { mountJobSync, type JobWsPayload } from "./job-sync";
-import { mountSettings, getSettings, openSettings } from "./settings";
+import { mountSettings, getSettings, openSettings, setExportPreset } from "./settings";
 import { mountHelp } from "./help";
 import { mountOnboarding } from "./onboarding";
 import { openSampleProject } from "./sample";
@@ -319,9 +319,10 @@ function cacheSource(key: string, png: string | null): void {
 /* ---------------------------------------------------------------- 批量导入（M3） */
 
 /** 把上传源文件落到 IndexedDB 并把 key 记到 doc.src（会话恢复后仍可重转换）。 */
-async function persistSource(doc: EditorDoc, file: File): Promise<void> {
+async function persistSource(doc: EditorDoc, file: File): Promise<string | null> {
   const key = await putSource(file);
   if (key && doc.src) doc.src.key = key;
+  return key;
 }
 
 /** 导入统一应用「当前配方」：有活动文档时取它的配方，否则取预设默认。 */
@@ -342,16 +343,65 @@ $("folder-input").addEventListener("change", (e) => {
   void importFiles(files, "打开文件夹");
 });
 
-/** 批量导入：逐个转换建档；坏文件跳过不中断，完成后汇总失败清单。 */
+/* 0.10.0：拖拽打开图片或 .pixelforge 项目 */
+window.addEventListener("dragover", (e) => {
+  if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+});
+window.addEventListener("drop", (e) => {
+  const files = [...(e.dataTransfer?.files ?? [])];
+  if (!files.length) return;
+  e.preventDefault();
+  const projects = files.filter((f) => f.name.toLowerCase().endsWith(".pixelforge"));
+  if (projects.length) {
+    if (projects.length > 1 || files.length > projects.length) {
+      setStatus("一次只能拖入一个项目文件");
+      return;
+    }
+    void openProjectFile(projects[0]);
+    return;
+  }
+  void importFiles(files, "拖拽导入");
+});
+
+/** 批量导入：逐个转换建档；坏文件跳过不中断，完成后汇总结果并可重试失败项。 */
 let progAbort: AbortController | null = null;
-async function importFiles(all: File[], label: string): Promise<void> {
+
+interface ImportMode {
+  presetName: string;
+  recipe: RecipeParams;
+  lineartMode: boolean;
+  extractMode: "xdog" | "onnx";
+}
+
+interface BatchItem {
+  file: File;
+  name: string;
+  ok: boolean;
+  error?: string;
+  docId?: string;
+  duplicate?: boolean;
+}
+
+interface BatchRun {
+  label: string;
+  mode: ImportMode;
+  items: BatchItem[];
+  cancelled: boolean;
+}
+
+let lastBatch: BatchRun | null = null;
+
+async function importFiles(all: File[], label: string, mode?: ImportMode): Promise<void> {
   const files = all
     .filter((f) => /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name))
     .sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
   if (!files.length) { setStatus(`${label}：未找到支持的图片`); return; }
-  const ctx = importCtx();
-  const lineartMode = ctx.presetName === "lineart";
-  const extractMode = ctx.recipe.lineart === "xdog" ? "xdog" : "onnx";
+  const base = importCtx();
+  const presetName = mode?.presetName ?? base.presetName;
+  const recipe = mode?.recipe ?? base.recipe;
+  const lineartMode = mode?.lineartMode ?? presetName === "lineart";
+  const extractMode = mode?.extractMode ?? (recipe.lineart === "xdog" ? "xdog" : "onnx");
+  const runMode: ImportMode = { presetName, recipe, lineartMode, extractMode };
   const progd = $("progd") as HTMLDialogElement;
   const t0 = performance.now();
   const tick = (text: string) => {
@@ -367,8 +417,7 @@ async function importFiles(all: File[], label: string): Promise<void> {
   progAbort = abort;
   const cancelBtn = $("prog-cancel") as HTMLButtonElement;
   cancelBtn.hidden = false;
-  const failed: string[] = [];
-  let ok = 0;
+  const items: BatchItem[] = [];
   try {
     for (let i = 0; i < files.length; i++) {
       if (abort.signal.aborted) break;
@@ -376,21 +425,24 @@ async function importFiles(all: File[], label: string): Promise<void> {
       tick(`${lineartMode ? "正在提取线稿" : "正在导入"} ${i + 1}/${files.length} · ${f.name}`);
       try {
         const name = f.name.replace(/\.[^.]+$/, "");
+        let doc: EditorDoc;
         if (lineartMode) {
           const t = performance.now();
           const r = await extractLineartFile(f, extractMode, abort.signal);
-          const d = docFromLineartResponse(name, r, { file: f }, ctx.recipe, ctx.presetName,
+          doc = docFromLineartResponse(name, r, { file: f }, recipe, presetName,
             Math.round(performance.now() - t));
-          await persistSource(d, f);
         } else {
-          const r = await convertFile(f, ctx.presetName, getState().size, recipeOverrides(ctx.recipe), abort.signal);
-          const d = await docFromResponse(name, r, { file: f }, ctx.recipe, ctx.presetName);
-          await persistSource(d, f);
+          const r = await convertFile(f, presetName, getState().size, recipeOverrides(recipe), abort.signal);
+          doc = await docFromResponse(name, r, { file: f }, recipe, presetName);
         }
-        ok++;
+        const key = await persistSource(doc, f);
+        const duplicate = !!key && getState().docs.some(
+          (other) => other.id !== doc.id && other.src?.key === key,
+        );
+        items.push({ file: f, name: f.name, ok: true, docId: doc.id, duplicate });
       } catch (err) {
         if ((err as Error).name === "AbortError") break;
-        failed.push(f.name);
+        items.push({ file: f, name: f.name, ok: false, error: (err as Error).message });
         console.warn("导入失败", f.name, err);
       }
     }
@@ -400,15 +452,89 @@ async function importFiles(all: File[], label: string): Promise<void> {
     window.clearInterval(timer);
     if (progd.open) progd.close();
   }
-  if (abort.signal.aborted) {
+  const ok = items.filter((i) => i.ok).length;
+  const failed = items.filter((i) => !i.ok);
+  const run: BatchRun = { label, mode: runMode, items, cancelled: abort.signal.aborted };
+  lastBatch = run;
+  if (files.length > 1 || failed.length) showBatchDialog(run);
+  if (run.cancelled) {
     setStatus(`已取消批量导入 · 完成 ${ok}/${files.length} 张`);
     return;
   }
   const failMsg = failed.length
-    ? ` · 失败 ${failed.length}（${failed.slice(0, 3).join("、")}${failed.length > 3 ? "…" : ""}）`
+    ? ` · 失败 ${failed.length}（${failed.slice(0, 3).map((i) => i.name).join("、")}${failed.length > 3 ? "…" : ""}）`
     : "";
   setStatus(`${lineartMode ? "线稿提取完成" : "导入完成"} ${ok}/${files.length} 张${failMsg}`);
 }
+
+function batchSummary(run: BatchRun): string {
+  const done = run.items.filter((i) => i.ok).length;
+  const failed = run.items.filter((i) => !i.ok).length;
+  if (getLocale() === "en-US") {
+    return `${done} succeeded · ${failed} failed · ${run.items.length} total${run.cancelled ? " · cancelled" : ""}`;
+  }
+  return `成功 ${done} · 失败 ${failed} · 共 ${run.items.length}${run.cancelled ? " · 已取消" : ""}`;
+}
+
+function showBatchDialog(run: BatchRun): void {
+  const dlg = $("batchdlg") as HTMLDialogElement;
+  $("batch-summary").textContent = batchSummary(run);
+  const list = $("batch-list");
+  list.textContent = "";
+  const en = getLocale() === "en-US";
+  for (const item of run.items) {
+    const row = document.createElement("div");
+    row.className = "pf-batch-row";
+    const name = document.createElement("span");
+    name.className = "pf-batch-name";
+    name.textContent = item.name;
+    name.title = item.name;
+    const status = document.createElement("span");
+    status.className = "pf-batch-status" + (item.ok ? "" : " err");
+    status.textContent = item.ok
+      ? (item.duplicate ? (en ? "OK · duplicate source" : "OK · 重复源图") : "OK")
+      : (en ? "Failed" : "失败");
+    if (item.error) status.title = item.error;
+    row.append(name, status);
+    list.appendChild(row);
+  }
+  ($("batch-retry") as HTMLButtonElement).hidden = !run.items.some((i) => !i.ok);
+  dlg.showModal();
+}
+
+function downloadBatchReport(run: BatchRun): void {
+  const report = {
+    generated_at: new Date().toISOString(),
+    label: run.label,
+    cancelled: run.cancelled,
+    total: run.items.length,
+    ok: run.items.filter((i) => i.ok).length,
+    failed: run.items.filter((i) => !i.ok).length,
+    items: run.items.map((i) => ({
+      name: i.name,
+      ok: i.ok,
+      error: i.error ?? null,
+      duplicate: i.duplicate ?? false,
+      doc_id: i.docId ?? null,
+    })),
+  };
+  downloadText(`pixelforge-batch-${Date.now()}.json`, JSON.stringify(report, null, 2));
+}
+
+$("batch-close")?.addEventListener("click", () => ($("batchdlg") as HTMLDialogElement).close());
+$("batch-report")?.addEventListener("click", () => {
+  if (lastBatch) downloadBatchReport(lastBatch);
+});
+$("batch-retry")?.addEventListener("click", () => {
+  const run = lastBatch;
+  if (!run) return;
+  const files = run.items.filter((i) => !i.ok).map((i) => i.file);
+  ($("batchdlg") as HTMLDialogElement).close();
+  if (files.length) void importFiles(files, `${run.label}（重试）`, run.mode);
+});
+($("batchdlg") as HTMLDialogElement).addEventListener("click", (e) => {
+  if (e.target === $("batchdlg")) ($("batchdlg") as HTMLDialogElement).close();
+});
 
 /* ------------------------------------------------ 预设/尺寸变更 → 重转换当前文档 */
 let converting = false;
@@ -1443,6 +1569,13 @@ function openExport(): void {
   const previewDoc = docs.find((d) => d.id === expPreviewId);
   // 打开时按当前文档类型对齐内容选项：线稿文档默认清晰线稿，像素文档回到合成
   ($("exp-content") as HTMLSelectElement).value = previewDoc?.lineart ? "engine" : "composite";
+  // 0.10.0：恢复上次导出预设
+  const preset = getSettings().exportPreset;
+  ($("exp-format") as HTMLSelectElement).value = preset.format;
+  ($("exp-scale") as HTMLSelectElement).value = String(preset.scale);
+  ($("exp-trans") as HTMLInputElement).checked = preset.transparent && preset.format !== "jpeg";
+  ($("exp-name") as HTMLSelectElement).value = preset.nameTemplate;
+  ($("exp-sheet") as HTMLInputElement).checked = preset.sheet;
   expdlg.showModal();
   expApplyContentUI();
   // 弹窗布局完成后（flex 尺寸就绪）再做预览适配
@@ -1516,6 +1649,14 @@ $("exp-trans").addEventListener("change", () => expRenderPreview());
   ($("exp-h") as HTMLInputElement).value = String(Math.round(doc.h * scale));
 });
 $("exp-ok").addEventListener("click", async () => {
+  // 0.10.0：记住本次导出设置（下次打开自动恢复）
+  setExportPreset({
+    format: ($("exp-format") as HTMLSelectElement).value as "png" | "jpeg" | "webp",
+    scale: Number(($("exp-scale") as HTMLSelectElement).value) || 1,
+    transparent: ($("exp-trans") as HTMLInputElement).checked,
+    nameTemplate: ($("exp-name") as HTMLSelectElement).value,
+    sheet: ($("exp-sheet") as HTMLInputElement).checked,
+  });
   const ids = expCheckedIds();
   if (!ids.length) { setStatus("尚未勾选任何文档"); return; }
   const content = expContent();
@@ -1614,6 +1755,25 @@ $("exp-ok").addEventListener("click", async () => {
       a.download = `spritesheet_${w}x${h}_${sources.length}${lineart ? "_ink" : ""}.${ext}`;
       a.href = out.toDataURL(mime);
       a.click();
+      // 0.10.0：图集元数据（帧矩形），方便游戏引擎切图
+      const atlas = {
+        image: a.download,
+        width: out.width,
+        height: out.height,
+        scale,
+        frames: sources.map(({ doc }, k) => ({
+          name: doc.name,
+          x: k * cellW,
+          y: 0,
+          w: cellW,
+          h: cellH,
+        })),
+      };
+      const meta = document.createElement("a");
+      meta.download = a.download.replace(/\.[^.]+$/, ".json");
+      meta.href = URL.createObjectURL(new Blob([JSON.stringify(atlas, null, 2)], { type: "application/json" }));
+      meta.click();
+      window.setTimeout(() => URL.revokeObjectURL(meta.href), 1000);
       files++;
       merged += sources.length;
       await new Promise((r) => setTimeout(r, 250));

@@ -1,12 +1,12 @@
 /** 标签栏面板（多文档切换/关闭；M5-6 拖拽重排 + 右键菜单）。 */
 
 import { closeDoc, closeDocsToRight, closeOtherDocs, getState, moveDoc, setActive, setState,
-  subscribe, activeDoc, layerFillAt, layerAlphaAt,
+  subscribe, activeDoc, layerFillAt, layerAlphaAt, updateDoc,
   type Tool, type Symmetry, type PaletteSort } from "../store";
 import { jumpHistory } from "../tools";
 import { ICONS } from "../icons";
-import { rgb2hsl, gammaLum, hsv2rgb, hexToRgb, rgbToHex } from "../color";
-import { confirmDiscard, confirmDialog } from "../dialogs";
+import { rgb2hsl, gammaLum, hsv2rgb, hexToRgb, rgbToHex, rgbToOklab } from "../color";
+import { confirmDiscard, confirmDialog, promptDialog } from "../dialogs";
 import { getLocale, t } from "../i18n";
 
 /** 关闭标签：有未保存手改时先确认（0.3.0）。 */
@@ -41,15 +41,31 @@ async function closeRightWithConfirm(index: number): Promise<void> {
   document.dispatchEvent(new CustomEvent("pf:status", { detail: n ? `已关闭右侧 ${n} 个标签` : "右侧没有标签" }));
 }
 
-/** 标签右键菜单（M5-6）：复制配方到全部 / 导出此文档 / 关闭其他 / 关闭右侧。 */
+/** 0.10.0：重命名标签（空名或未改动则保持原样）。 */
+async function renameDoc(index: number): Promise<void> {
+  const doc = getState().docs[index];
+  if (!doc) return;
+  const name = await promptDialog({
+    title: t("重命名文档"),
+    label: t("文档名称"),
+    value: doc.name,
+    maxLength: 60,
+  });
+  if (!name || name === doc.name) return;
+  updateDoc(doc, { name });
+  document.dispatchEvent(new CustomEvent("pf:status", { detail: `已重命名为「${name}」` }));
+}
+
+/** 标签右键菜单（M5-6）：重命名 / 复制配方到全部 / 导出此文档 / 关闭其他 / 关闭右侧。 */
 function showTabMenu(x: number, y: number, index: number): void {
   document.getElementById("tab-ctx")?.remove();
   const menu = document.createElement("div");
   menu.id = "tab-ctx";
   menu.className = "pf-ctx";
   menu.style.left = `${Math.min(x, window.innerWidth - 190)}px`;
-  menu.style.top = `${Math.min(y, window.innerHeight - 150)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - 170)}px`;
   const items: Array<[string, () => void]> = [
+    ["重命名…", () => void renameDoc(index)],
     ["复制配方到全部标签", () => document.dispatchEvent(new CustomEvent("pf:recipes-to-all", { detail: index }))],
     ["导出此文档…", () => document.dispatchEvent(new CustomEvent("pf:export-doc", { detail: index }))],
     ["关闭其他标签", () => void closeOthersWithConfirm(index)],
@@ -352,6 +368,34 @@ export function mountPalette(
   };
 
   const hexOfRgb = (rgb: [number, number, number]) => rgbToHex(rgb);
+
+  /* 0.10.0：色板可辨性检查（OKLab ΔE，越小越难区分） */
+  const CONTRAST_MIN = 0.08;
+  document.getElementById("pal-contrast")?.addEventListener("click", () => {
+    const doc = activeDoc();
+    if (!doc) {
+      document.dispatchEvent(new CustomEvent("pf:status", { detail: t("请先打开一个文档") }));
+      return;
+    }
+    const pal = doc.palette;
+    if (pal.length < 2) {
+      document.dispatchEvent(new CustomEvent("pf:status", { detail: t("色板不足 2 色") }));
+      return;
+    }
+    const labs = pal.map(rgbToOklab);
+    let min = Infinity, close = 0, a = 0, b = 1;
+    for (let i = 0; i < labs.length; i++) {
+      for (let j = i + 1; j < labs.length; j++) {
+        const d = Math.hypot(labs[i][0] - labs[j][0], labs[i][1] - labs[j][1], labs[i][2] - labs[j][2]);
+        if (d < CONTRAST_MIN) close++;
+        if (d < min) { min = d; a = i; b = j; }
+      }
+    }
+    const detail = close
+      ? `色板可辨性：${close} 组低于 ${CONTRAST_MIN} · 最小 ΔE ${min.toFixed(3)}（${hexOfRgb(pal[a])} ↔ ${hexOfRgb(pal[b])}）`
+      : `色板可辨性：通过 · 最小 ΔE ${min.toFixed(3)}`;
+    document.dispatchEvent(new CustomEvent("pf:status", { detail }));
+  });
 
   const sortCustom = (hexes: string[], mode: PaletteSort): string[] =>
     hexes.map((hex) => ({ hex, rgb: hexToRgb(hex)! }))

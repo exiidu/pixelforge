@@ -49,6 +49,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from PIL import Image
 from pydantic import BaseModel
 
@@ -67,7 +68,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="PixelForge Engine", version="0.9.0", lifespan=_lifespan)
+app = FastAPI(title="PixelForge Engine", version="0.10.0", lifespan=_lifespan)
 
 
 def _cors_origins() -> list[str]:
@@ -161,8 +162,9 @@ def _record_audit(agent_id: str, method: str, path: str, status: int) -> None:
 
 
 # 0.9.0：统一错误封包 {"error": {"code", "message"}}，前端不再直接显示后端异常。
-@app.exception_handler(HTTPException)
-async def _http_error(_request: Request, exc: HTTPException):
+# 0.10.0：注册到 Starlette 基类，404 等未匹配路由也返回同一封包（此前漏网）。
+@app.exception_handler(StarletteHTTPException)
+async def _http_error(_request: Request, exc: StarletteHTTPException):
     detail = exc.detail
     code = f"http_{exc.status_code}"
     if isinstance(detail, dict):

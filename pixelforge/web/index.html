@@ -63,6 +63,32 @@
       </div>
     </dialog>
 
+    <dialog id="promptdlg" class="pf-dlg" aria-labelledby="prompt-title">
+      <div class="pf-dlg-body">
+        <h3 id="prompt-title">重命名文档</h3>
+        <label class="pf-prompt-label"><span id="prompt-label">文档名称</span>
+          <input id="prompt-input" type="text" maxlength="60" />
+        </label>
+        <div class="pf-dlg-btns">
+          <button type="button" class="pf-btn" id="prompt-cancel">取消</button>
+          <button type="button" class="pf-btn primary" id="prompt-ok">确定</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="batchdlg" class="pf-dlg" aria-labelledby="batch-title">
+      <div class="pf-dlg-body">
+        <h3 id="batch-title">批量导入结果</h3>
+        <p class="pf-mute" id="batch-summary"></p>
+        <div class="pf-batch-list" id="batch-list"></div>
+        <div class="pf-dlg-btns">
+          <button type="button" class="pf-btn" id="batch-report">下载报告</button>
+          <button type="button" class="pf-btn" id="batch-retry" hidden>重试失败项</button>
+          <button type="button" class="pf-btn primary" id="batch-close">关闭</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="confirmdlg" class="pf-dlg pf-confirm" aria-labelledby="confirm-title">
       <div class="pf-dlg-body">
         <h3 id="confirm-title">确认</h3>
@@ -237,6 +263,7 @@
           <button class="pf-btn mini" id="pal-import" title="导入 .hex（每行一个 RRGGBB）或 .gpl（GIMP 色板）；整板替换，索引不动，可撤销">导入色板…</button>
           <button class="pf-btn mini" id="pal-export-hex" title="导出当前文档色板为 .hex（每行 RRGGBB）">导出 .hex</button>
           <button class="pf-btn mini" id="pal-export-gpl" title="导出当前文档色板为 .gpl（GIMP 色板）">导出 .gpl</button>
+          <button class="pf-btn mini" id="pal-contrast" title="用 OKLab 色差检查当前文档色板，提示难以区分的颜色">可辨性检查</button>
         </div>
         <input id="pal-input" type="file" accept=".hex,.gpl,.txt" hidden />
         <div class="pf-pal-sec">文档颜色 <span class="pf-val">左键选色 · 自定义色左键选用 / 右键删除</span></div>

@@ -1,6 +1,6 @@
 # PixelForge 交接文档（HANDOFF）
 
-> 更新：2026-10-27。写给下一个接手的 AI 会话或开发者：读这一份 + 三份设计文档即可接管全部工作。
+> 更新：2026-10-28。写给下一个接手的 AI 会话或开发者：读这一份 + 三份设计文档即可接管全部工作。
 
 ---
 
@@ -75,6 +75,7 @@
 | 安全与 Agent 0.7.0（MCP 请求带 Agent 标识；写操作审计与设置页「最近操作」；会话 8MB 上限、Agent/文件名长度与权限表上限） | ✅ 2026-10-27 |
 | 分发 0.8.0（引擎托管 `web/dist` 单进程 :8700；启动脚本自动分流；`tools/build_release.py` 便携 zip；`web_dist` 健康状态） | ✅ 2026-10-27 |
 | 可靠性 0.9.0（数据目录迁出安装目录；日志轮转 + 诊断包；会话 `.bak` 回退；统一错误封包；离线/恢复轮询；前端异常兜底；删图层确认） | ✅ 2026-10-28 |
+| 工作流 0.10.0（批量导入结果/重试/JSON 报告/重复源；拖拽打开图片与项目；导出预设记忆；图集 `.atlas.json`；标签重命名；调色板 OKLab 可辨性检查） | ✅ 2026-10-28 |
 | 后续产品化 A4–H（色盲辅助、多文档工程、免 Python 安装包、token 等）见 `productization-roadmap.md` | ⬜ |
 
 ## 5. 架构关键决策（改代码前必读）
@@ -89,7 +90,7 @@
 4.1 **网格尺寸解析（M5.2）**：`Recipe.target_for(src_shape)` 统一算网格——`target.preserve_aspect=true` 时**长边 = target 的长边**、短边按源图宽高比取整（非正方形素材不再被拉方，编辑器导入固定传 true）；
    默认 false → 引擎行为与既有调用/测试完全一致。`rerun_region` 的掩码校验改为以 `base.fill` 形状为准（网格可能非正方形）。
 5. **导出前端合成**：`composeDocCanvas(doc, transparent)` → ImageData；M5-0 起 `transparent=true` 时按**真 alpha**（`doc.alpha` 或层 `alpha` 覆盖）输出，无 alpha 素材才回退边缘泛洪；不勾透明则忽略 alpha（不透明）。索引 PNG（PLTE+tRNS）走 `POST /api/export_indexed`（前端先 `composeIndexGrid` 出索引网格）。
-6. **配方与会话都是每文档**：`EditorDoc.recipe/presetName` 独立；「应用到全部标签」广播后逐个重转换；`GET/POST /api/session` 落盘 `web/session.json`（localStorage 为轻量副本）。
+6. **配方与会话都是每文档**：`EditorDoc.recipe/presetName` 独立；「应用到全部标签」广播后逐个重转换；`GET/POST /api/session` 落盘数据目录 `session.json`（旧 `web/session.json` 兼容读取），localStorage 为轻量副本。
 7. **MCP 是薄代理**：AI 客户端 ──stdio──> `engine/mcp_server.py` ──HTTP(回环白名单)──> :8700 唯一事实源。
 8. **局部重算（M4）**：`/api/rerun_region` 只重跑 S2 采样并**固定沿用原色板**（索引语义不变），
    仅 `extract` 板可把区域新色追加到**尾部**；掩码只写回标记格、ink 原样保留；结果写回 job 支持链式。

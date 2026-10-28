@@ -9,6 +9,38 @@ export type ThemeMode = "system" | "light" | "dark";
 export type AccentColor = "green" | "blue" | "amber";
 export type DefaultPreset = "photo" | "illustration" | "lineart";
 
+export interface ExportPreset {
+  format: "png" | "jpeg" | "webp";
+  scale: number;
+  transparent: boolean;
+  nameTemplate: string;
+  sheet: boolean;
+}
+
+const DEFAULT_EXPORT_PRESET: ExportPreset = {
+  format: "png",
+  scale: 1,
+  transparent: false,
+  nameTemplate: "auto",
+  sheet: false,
+};
+
+function normalizeExportPreset(raw: unknown): ExportPreset {
+  const source = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const format = source.format === "jpeg" || source.format === "webp" ? source.format : "png";
+  const scale = [1, 2, 4, 8, 16].includes(Number(source.scale)) ? Number(source.scale) : 1;
+  const nameTemplate = ["auto", "{name}_{size}", "{name}_{preset}"].includes(String(source.nameTemplate))
+    ? String(source.nameTemplate)
+    : "auto";
+  return {
+    format,
+    scale,
+    transparent: source.transparent === true,
+    nameTemplate,
+    sheet: source.sheet === true,
+  };
+}
+
 export interface AppSettings {
   version: number;
   language: "zh-CN" | "en-US";
@@ -20,6 +52,7 @@ export interface AppSettings {
   defaultSize: number;
   showGrid: boolean;
   agentNotifications: boolean;
+  exportPreset: ExportPreset;
 }
 
 const KEY = "pf.settings.v1";
@@ -34,6 +67,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   defaultSize: 64,
   showGrid: true,
   agentNotifications: true,
+  exportPreset: { ...DEFAULT_EXPORT_PRESET },
 };
 
 let current: AppSettings = loadSettings();
@@ -68,6 +102,7 @@ function normalize(raw: unknown): AppSettings {
     defaultSize: clampSize(source.defaultSize),
     showGrid: source.showGrid !== false,
     agentNotifications: source.agentNotifications !== false,
+    exportPreset: normalizeExportPreset(source.exportPreset),
   };
 }
 
@@ -319,6 +354,14 @@ export function openSettings(tab = "general"): void {
 
 export function getSettings(): AppSettings {
   return current;
+}
+
+/** 0.10.0：记住上次导出格式/倍率/透明/命名/图集，下次打开导出窗自动恢复。 */
+export function setExportPreset(preset: ExportPreset): void {
+  const normalized = normalizeExportPreset(preset);
+  if (JSON.stringify(normalized) === JSON.stringify(current.exportPreset)) return;
+  current = { ...current, exportPreset: normalized };
+  persist();
 }
 
 /** 切换界面语言（引导第一步与设置页共用）：即时生效并持久化。 */
