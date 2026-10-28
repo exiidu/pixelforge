@@ -3,6 +3,10 @@
 引擎的 AI 档使用两个 ONNX 模型。**权重不随仓库分发**（`*.onnx` 已在 `.gitignore` 中），
 可用 `python tools/download_models.py` 下载并校验。
 
+> 为什么不入库：三个文件合计约 198 MB，其中 `u2net.onnx` 超过 GitHub 单文件 100 MB 硬上限；
+> 全部纳入普通 Git 会让每次 clone 膨胀约 200 MB。私有 fork 如确需版本控制，可用 Git LFS
+> （免费额度 1 GB 存储 / 1 GB 月流量）。手动放置路径与离线接入见根 README「模型接入」。
+
 ## 目录结构与规格
 
 ```

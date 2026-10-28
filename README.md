@@ -53,6 +53,8 @@ cd ../..                            # 回到仓库根目录
 python pixelforge/tools/download_models.py
 ```
 
+模型接入细节（固定路径、手动下载、离线与 Git LFS）见下文「模型接入」。
+
 启动（仓库根目录）：
 
 ```bat
@@ -87,6 +89,47 @@ cd pixelforge/web && npm run dev
 不要同时安装 `onnxruntime` 与 GPU 版（导入名相同，二者只能保留一个）。
 
 本机 CPU 实测（2048×1536 输入，photo 配方）：512 格整条管线约 **1.8s**（0.3.0 约 7.4s），其中 S2 约 1.0s、S3 约 0.6s；64 格约 0.8s。GPU 主要加速 AI 推理（线稿 CPU 约 3s，GPU 通常百毫秒级）。
+
+## 模型接入（可选 AI）
+
+AI 线稿与主体抠图需要 3 个 ONNX 文件，合计约 **198 MB**。**权重不随仓库分发**：
+
+- GitHub 单文件硬上限 100 MB，`matting/u2net.onnx` 约 176 MB，直接 `git add` 会被拒绝。
+- 三个文件全部入库会让每次 clone 与仓库历史膨胀约 200 MB；权重也不适合走普通 Git 差异存储。
+
+把文件放到以下固定路径即可（文件名必须一致）：
+
+```
+pixelforge/models/
+├── lineart/
+│   └── model.onnx       # ~17 MB   Informative Drawings 线稿
+└── matting/
+    ├── u2net.onnx       # ~176 MB  U²-Net 主体抠图（默认）
+    └── u2netp.onnx      # ~4.6 MB  U²-NetP 轻量快速档
+```
+
+推荐用下载脚本（自动选择镜像并校验 SHA-256）：
+
+```bash
+python pixelforge/tools/download_models.py          # 缺失的才下载
+python pixelforge/tools/download_models.py --check  # 只校验已有文件
+python pixelforge/tools/download_models.py --force  # 重新下载全部
+```
+
+内网/离线：手动下载后按上表命名放到对应目录，再执行 `--check` 校验。
+下载源、文件大小与 SHA-256 见 [models/README.md](pixelforge/models/README.md)。
+
+启用：`pip install onnxruntime`（GPU 版见上一节），重启引擎。设置 → 引擎应显示
+「AI 模型 ✓」；转换预设选「线稿提取」，或在转换参数里开启线稿 / 抠图。
+
+如果确实需要把权重纳入版本控制（只建议私有 fork，不建议主仓库）：
+GitHub 的 Git LFS 免费额度为 1 GB 存储 / 1 GB 月流量，克隆时会拉取约 198 MB。
+
+```bash
+git lfs install
+git lfs track "pixelforge/models/**/*.onnx"
+git add .gitattributes pixelforge/models
+```
 
 ## 便携包（单进程）
 
@@ -243,6 +286,22 @@ The engine reports the active device under Settings → Engine.
 Portable build: `python pixelforge/tools/build_release.py` produces
 `dist/pixelforge-<version>-portable.zip`. The engine then serves `web/dist` at
 `http://127.0.0.1:8700/`, so Node is not required at runtime.
+
+### AI models (optional)
+
+Model weights are **not committed** (~198 MB total): GitHub rejects files over 100 MB
+(`u2net.onnx` is ~176 MB), and committing all three would bloat every clone. Put the files at:
+
+```
+pixelforge/models/lineart/model.onnx      (~17 MB)
+pixelforge/models/matting/u2net.onnx      (~176 MB, default)
+pixelforge/models/matting/u2netp.onnx     (~4.6 MB, fast)
+```
+
+or run `python pixelforge/tools/download_models.py` (add `--check` to verify, `--force` to redownload).
+Sources, sizes, and SHA-256 are listed in `pixelforge/models/README.md`. For offline use, copy the files
+manually and run `--check`. A private fork that must version the weights can use Git LFS
+(`git lfs track "pixelforge/models/**/*.onnx"`), but note the 1 GB free storage/bandwidth quota.
 
 ### MCP
 
