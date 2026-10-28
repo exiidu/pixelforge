@@ -30,23 +30,30 @@ import base64
 import io
 import json
 import os
+import logging
+import platform
+import sys
 import threading
 import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from functools import partial
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
 from engine.ai.runtime import device_info
+from engine.paths import DATA_DIR, LOG_PATH, SESSION_BAK, SESSION_PATH, UPLOAD_DIR
 from engine.pipeline import AIProviders, ConversionPipeline
 from engine.recipe import Recipe, load_recipe, preset_names
 from engine.stages import s5_post
@@ -60,7 +67,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="PixelForge Engine", version="0.8.0", lifespan=_lifespan)
+app = FastAPI(title="PixelForge Engine", version="0.9.0", lifespan=_lifespan)
 
 
 def _cors_origins() -> list[str]:
@@ -100,12 +107,43 @@ _AGENTS: dict[str, dict] = {}
 _AGENT_ONLINE_TTL = 30.0
 _MAX_JOBS = 128
 _LOOP: asyncio.AbstractEventLoop | None = None
-UPLOAD_DIR = Path(__file__).resolve().parents[2] / ".cache" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-SESSION_PATH = Path(__file__).resolve().parents[2] / "web" / "session.json"
 SESSION_MAX_BYTES = 8_000_000  # 0.7.0：会话上限，拒绝超大 JSON 写入
+# 0.9.0：旧版把会话写在安装目录，读取时作为最后回退；新写入统一进数据目录。
+LEGACY_SESSION = Path(__file__).resolve().parents[2] / "web" / "session.json"
 # 0.8.0：前端构建产物目录；存在时由引擎直接托管，便携版无需 Node。
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
+
+
+def _setup_logging() -> None:
+    """0.9.0：日志落盘到数据目录（2MB × 3 轮转），便于诊断包导出。"""
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    if any(
+        isinstance(h, RotatingFileHandler)
+        and str(getattr(h, "baseFilename", "")).endswith("engine.log")
+        for h in root.handlers
+    ):
+        return
+    handler = RotatingFileHandler(
+        LOG_PATH, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.setLevel(logging.INFO)
+    root.addHandler(handler)
+
+
+_setup_logging()
+
+
+def _log_tail(lines: int = 200) -> list[str]:
+    if not LOG_PATH.exists():
+        return []
+    try:
+        text = LOG_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return text.splitlines()[-lines:]
 
 # 0.7.0：Agent 操作审计（仅记录带 X-PixelForge-Agent 的写请求）
 _AUDIT_MAX = 200
@@ -120,6 +158,43 @@ def _record_audit(agent_id: str, method: str, path: str, status: int) -> None:
         "action": f"{method} {path}",
         "status": int(status),
     })
+
+
+# 0.9.0：统一错误封包 {"error": {"code", "message"}}，前端不再直接显示后端异常。
+@app.exception_handler(HTTPException)
+async def _http_error(_request: Request, exc: HTTPException):
+    detail = exc.detail
+    code = f"http_{exc.status_code}"
+    if isinstance(detail, dict):
+        code = str(detail.get("code") or code)
+        message = str(detail.get("message") or detail.get("detail") or "请求失败")
+    else:
+        message = str(detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": code, "message": message}},
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(_request: Request, _exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"error": {"code": "invalid_request", "message": "请求参数不合法"}},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_error(request: Request, exc: Exception):
+    logging.getLogger("pixelforge").error(
+        "未处理异常 %s %s: %s", request.method, request.url.path, exc,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "internal", "message": "引擎内部错误，请导出诊断包查看日志"}},
+    )
 
 
 @app.middleware("http")
@@ -658,6 +733,21 @@ def health():
     }
 
 
+@app.get("/api/diagnostics")
+def diagnostics():
+    """0.9.0：诊断包（版本/平台/设备/模型/数据目录/最近日志），供问题排查。"""
+    info = health()
+    info.update({
+        "generated_at": time.time(),
+        "python": sys.version,
+        "platform": platform.platform(),
+        "data_dir": str(DATA_DIR),
+        "log_path": str(LOG_PATH),
+        "log_tail": _log_tail(200),
+    })
+    return info
+
+
 @app.get("/api/jobs")
 def jobs_list():
     """列出当前内存中的 job（MCP agent 挑选编辑器文档用）。"""
@@ -993,13 +1083,19 @@ def get_pixel(job_id: str, x: int, y: int):
 
 @app.get("/api/session")
 def session_load():
-    """读取最近一次自动保存的编辑器会话（无则 404）。"""
-    if not SESSION_PATH.exists():
-        raise HTTPException(404, "无自动保存")
-    try:
-        return json.loads(SESSION_PATH.read_text(encoding="utf-8"))
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"会话文件损坏: {e}") from e
+    """读取最近一次自动保存；主文件损坏时回退 .bak，再回退旧版路径。"""
+    corrupt = False
+    for path in (SESSION_PATH, SESSION_BAK, LEGACY_SESSION):
+        if not path.exists():
+            continue
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            corrupt = True
+            logging.getLogger("pixelforge").warning("会话文件不可读 %s: %s", path, e)
+    if corrupt:
+        raise HTTPException(500, "自动保存文件损坏，且没有可用备份")
+    raise HTTPException(404, "无自动保存")
 
 
 @app.post("/api/session")
@@ -1009,6 +1105,11 @@ def session_save(req: SessionRequest):
     if len(payload.encode("utf-8")) > SESSION_MAX_BYTES:
         raise HTTPException(413, "会话超过 8MB 上限，已拒绝写入")
     SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if SESSION_PATH.exists():
+        try:  # 0.9.0：保留上一份可读会话，主文件损坏时可回退
+            SESSION_BAK.write_bytes(SESSION_PATH.read_bytes())
+        except OSError as e:
+            logging.getLogger("pixelforge").warning("会话备份失败: %s", e)
     tmp = SESSION_PATH.with_suffix(".json.tmp")
     tmp.write_text(payload, encoding="utf-8")
     tmp.replace(SESSION_PATH)

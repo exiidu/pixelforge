@@ -434,4 +434,9 @@ export const EN: Record<string, string> = {
   "刷新": "Refresh",
   "暂无 Agent 操作记录。": "No recent Agent actions.",
   "审计日志不可用（引擎离线）。": "Audit log unavailable (engine offline).",
+  "导出诊断包": "Export diagnostics",
+  "诊断包已导出": "Diagnostics exported",
+  "诊断包导出失败（引擎离线）": "Failed to export diagnostics (engine offline)",
+  "引擎已恢复": "Engine back online",
+  "删除": "Delete",
 };

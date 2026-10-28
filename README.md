@@ -148,6 +148,18 @@ start_all.bat                                # 或 bash start_all.sh
 
 前端由引擎在 `http://127.0.0.1:8700/` 直接托管，不需要 Node。免 Python 的安装包仍在路线图中。
 
+## 数据目录与诊断
+
+自动保存会话、上传缓存与引擎日志不再写进安装目录，默认位置：
+
+- Windows：`%LOCALAPPDATA%\PixelForge`
+- macOS：`~/Library/Application Support/PixelForge`
+- Linux：`~/.local/share/pixelforge`
+
+可用 `PIXELFORGE_DATA_DIR` 指定其他可写目录（便携包/U 盘场景）。会话每次保存前保留
+`session.json.bak`，主文件损坏时自动回退；旧版 `web/session.json` 仍可读取一次。
+设置 → 引擎 →「导出诊断包」会下载包含版本、平台、AI 设备、模型状态、数据目录与最近日志的 JSON。
+
 ## MCP 接入
 
 在 MCP 客户端（如 ZCode / Claude Desktop 等支持 stdio 的客户端）中加入：
@@ -182,7 +194,7 @@ start_all.bat                                # 或 bash start_all.sh
 以下命令均从仓库根目录执行：
 
 ```bash
-# 后端测试（当前 122 个用例）
+# 后端测试（当前 130 个用例）
 cd pixelforge && python -m pytest -q
 
 # 前端类型检查与构建

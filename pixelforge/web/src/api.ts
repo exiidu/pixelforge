@@ -17,17 +17,35 @@ export interface ConvertResponse {
   recipe: Record<string, unknown>;
 }
 
-async function ensureOk(res: Response): Promise<Response> {
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      detail = (await res.json()).detail ?? detail;
-    } catch {
-      /* 保留默认 */
-    }
-    throw new Error(`引擎 ${res.status}: ${detail}`);
+/** 0.9.0：统一错误封包；message 已是用户可读文案。 */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string) {
+    super(message);
+    this.name = "ApiError";
   }
-  return res;
+}
+
+async function ensureOk(res: Response): Promise<Response> {
+  if (res.ok) return res;
+  let message = res.statusText || "请求失败";
+  let code = `http_${res.status}`;
+  try {
+    const body = await res.json() as {
+      error?: { code?: string; message?: string };
+      detail?: string | { message?: string };
+    };
+    if (body?.error?.message) {
+      message = body.error.message;
+      code = body.error.code ?? code;
+    } else if (typeof body?.detail === "string") {
+      message = body.detail;
+    } else if (body?.detail && typeof body.detail === "object" && body.detail.message) {
+      message = body.detail.message;
+    }
+  } catch {
+    /* 非 JSON 响应：保留 statusText */
+  }
+  throw new ApiError(message, res.status, code);
 }
 
 /** 配方覆盖（M3 参数面板）：与 target 一并送引擎，深合并到预设配方上。 */

@@ -2189,15 +2189,38 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* ---------------------------------------------------------------- 引擎状态 */
-health()
-  .then((h) => {
+let engineOnline: boolean | null = null;
+async function refreshEngineHealth(): Promise<void> {
+  try {
+    const h = await health();
     const dev = h.ai_device?.active;
     const label = dev === "cuda" ? "CUDA" : dev === "dml" ? "DirectML" : dev === "cpu" ? "CPU" : "";
     const models = Object.values(h.models).filter(Boolean).length;
     $("engine-status").textContent =
       `引擎 ${h.status} · 模型 ${models}/3${label ? ` · ${label}` : ""}`;
-  })
-  .catch(() => ($("engine-status").textContent = "引擎离线（start_engine.bat）"));
+    if (engineOnline === false) setStatus("引擎已恢复");
+    engineOnline = true;
+  } catch {
+    $("engine-status").textContent = "引擎离线（start_engine.bat）";
+    if (engineOnline !== false) setStatus("引擎离线（start_engine.bat）");
+    engineOnline = false;
+  }
+}
+void refreshEngineHealth();
+window.setInterval(() => void refreshEngineHealth(), 20000);
+
+/** 0.9.0：前端兜底——未捕获异常不再静默失败，至少落到状态栏与日志。 */
+function reportClientError(prefix: string, err: unknown): void {
+  if ((err as { name?: string } | null)?.name === "AbortError") return;
+  console.error(prefix, err);
+  const message = err instanceof Error ? err.message : String(err);
+  setStatus(`${prefix}: ${message}`);
+}
+window.addEventListener("unhandledrejection", (e) => reportClientError("未处理异常", e.reason));
+window.addEventListener("error", (e) => {
+  if (!e.error && !e.message) return; // 资源加载失败等无错误对象的事件
+  reportClientError("界面异常", e.error ?? e.message);
+});
 
 /* ---------------------------------------------------------------- 会话自动保存/恢复（M3） */
 const urlParams = new URLSearchParams(location.search);

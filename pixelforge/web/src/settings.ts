@@ -283,6 +283,24 @@ async function refreshAudit(): Promise<void> {
   }
 }
 
+async function exportDiagnostics(): Promise<void> {
+  try {
+    const res = await fetch("/api/diagnostics", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: unknown = await res.json();
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `pixelforge-diagnostics-${stamp}.json`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    document.dispatchEvent(new CustomEvent("pf:status", { detail: "诊断包已导出" }));
+  } catch {
+    document.dispatchEvent(new CustomEvent("pf:status", { detail: "诊断包导出失败（引擎离线）" }));
+  }
+}
+
 export function openSettings(tab = "general"): void {
   const dlg = $<HTMLDialogElement>("settingsdlg");
   if (!dlg) return;
@@ -426,6 +444,7 @@ export function mountSettings(): void {
   }
 
   $("set-engine-refresh")?.addEventListener("click", () => void refreshEngineStatus());
+  $("set-diagnostics")?.addEventListener("click", () => void exportDiagnostics());
   $("set-audit-refresh")?.addEventListener("click", () => void refreshAudit());
   $("set-export")?.addEventListener("click", exportSettings);
   $("set-import")?.addEventListener("click", () => $<HTMLInputElement>("set-import-file")?.click());

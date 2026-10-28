@@ -116,6 +116,8 @@ const DYN: DynRule[] = [
   [/^保存失败: (.*)$/, "Save failed: $1"],
   [/^读取源图失败: (.*)$/, "Failed to read source image: $1"],
   [/^请选择项目文件「(.+)」$/, "Please choose the project file “$1”"],
+  [/^未处理异常: (.*)$/, "Unhandled error: $1"],
+  [/^界面异常: (.*)$/, "UI error: $1"],
   [/^关闭 (.+)$/, "Close $1"],
   [/^切换 (.+) 可见性$/, "Toggle visibility of $1"],
   [/^发现 (\d+) 个文档（自动保存于 (.+)）。$/, "Found $1 documents (autosaved at $2)."],

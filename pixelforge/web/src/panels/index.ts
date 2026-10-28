@@ -6,7 +6,8 @@ import { closeDoc, closeDocsToRight, closeOtherDocs, getState, moveDoc, setActiv
 import { jumpHistory } from "../tools";
 import { ICONS } from "../icons";
 import { rgb2hsl, gammaLum, hsv2rgb, hexToRgb, rgbToHex } from "../color";
-import { confirmDiscard } from "../dialogs";
+import { confirmDiscard, confirmDialog } from "../dialogs";
+import { getLocale, t } from "../i18n";
 
 /** 关闭标签：有未保存手改时先确认（0.3.0）。 */
 async function closeTabWithConfirm(index: number): Promise<void> {
@@ -268,7 +269,19 @@ export function mountLayers(container: HTMLElement): void {
         del.title = "删除图层（可撤销）";
         del.addEventListener("click", (e) => {
           e.stopPropagation();
-          container.dispatchEvent(new CustomEvent("pf:delete-layer", { bubbles: true, detail: l.id }));
+          const en = getLocale() === "en-US";
+          void confirmDialog({
+            title: t("删除图层"),
+            message: en
+              ? `Delete layer “${l.name}”? This can be undone.`
+              : `删除图层「${l.name}」？此操作可撤销。`,
+            okText: t("删除"),
+            cancelText: t("取消"),
+          }).then((ok) => {
+            if (ok) {
+              container.dispatchEvent(new CustomEvent("pf:delete-layer", { bubbles: true, detail: l.id }));
+            }
+          });
         });
         row.appendChild(del);
       }

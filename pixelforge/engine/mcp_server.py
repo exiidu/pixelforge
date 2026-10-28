@@ -165,7 +165,12 @@ def _request(method: str, path: str, payload: dict | None = None) -> dict:
         return _open(method, path, payload)
     except urllib.error.HTTPError as e:
         try:
-            detail = json.loads(e.read().decode("utf-8")).get("detail", e.reason)
+            body = json.loads(e.read().decode("utf-8"))
+            detail = (
+                (body.get("error") or {}).get("message")
+                or body.get("detail")
+                or e.reason
+            )
         except Exception:  # noqa: BLE001
             detail = e.reason
         raise RuntimeError(f"引擎返回 {e.code}: {detail}") from e
