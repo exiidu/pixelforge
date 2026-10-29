@@ -146,7 +146,28 @@ python pixelforge/tools/download_models.py   # 可选：下载 AI 模型
 start_all.bat                                # 或 bash start_all.sh
 ```
 
-前端由引擎在 `http://127.0.0.1:8700/` 直接托管，不需要 Node。免 Python 的安装包仍在路线图中。
+前端由引擎在 `http://127.0.0.1:8700/` 直接托管，不需要 Node。
+
+### 免 Python 版（Windows x64）
+
+```bash
+python pixelforge/tools/build_standalone.py
+```
+
+生成 `dist/pixelforge-<version>-windows-x64-noinstall.zip`（约 120 MB）：内置 Python 3.12 运行时、
+FastAPI / NumPy / OpenCV / Pillow / uvicorn / onnxruntime / MCP SDK 与前端 dist，不依赖系统 Python 或 Node。
+构建机需要联网下载 Python embeddable 包与依赖（缓存在 `.cache/standalone`）。
+
+解压后：
+
+- 双击 `PixelForge.bat`：启动引擎并打开浏览器（默认 8700，可用 `PIXELFORGE_PORT` 改端口）。
+- 双击 `download_models.bat`：下载可选 AI 模型（默认缺失才下载；可加 `--check`）。
+- MCP 客户端使用包内解释器：`command` 填 `<解压目录>\python\python.exe`，
+  `args` 填 `["<解压目录>\pixelforge\mcp_launcher.py"]`。
+
+模型权重与用户数据不随包分发；会话、上传缓存与日志仍写入系统数据目录。U 盘等便携场景可设置
+`PIXELFORGE_DATA_DIR=<解压目录>\data`。目前仅提供 Windows x64 免 Python 包；
+macOS/Linux 仍使用便携 zip + 系统 Python。
 
 ## 数据目录与诊断
 
@@ -213,7 +234,7 @@ pixelforge/                 仓库根
 │   ├── web/                Vite + TypeScript 编辑器（无 UI 框架）
 │   ├── tests/              pytest
 │   ├── models/             模型目录与下载说明（权重不入库）
-│   └── tools/              脚本：模型下载、MCP 端到端检查、测试图生成
+│   └── tools/              脚本：模型下载、便携包 / 免 Python 包构建、MCP 检查、测试图生成
 ├── start_all.bat           一键启动（引擎 + 前端）
 ├── start_all.sh            一键启动（macOS / Linux）
 ├── start_engine.bat        仅启动引擎
@@ -231,7 +252,7 @@ pixelforge/                 仓库根
 - 快捷键目前为固定映射，尚不支持自定义。
 - 引擎默认 CPU；GPU 加速目前覆盖 ONNX 推理（CUDA / DirectML），S0–S5 仍为 CPU（大网格已做稀疏与分块优化）。
 - 画布绘制仍以指针为主；键盘可完成工具切换、标签/图层/调色板导航与弹窗操作。
-- 项目文件为单文档快照；多文档工程与安装包仍在路线图（A5 / E）中。
+- 项目文件为单文档快照；多文档工程仍在路线图；Windows 免 Python 包已提供（0.11.0）。
 
 ## 许可
 
@@ -298,6 +319,11 @@ The engine reports the active device under Settings → Engine.
 Portable build: `python pixelforge/tools/build_release.py` produces
 `dist/pixelforge-<version>-portable.zip`. The engine then serves `web/dist` at
 `http://127.0.0.1:8700/`, so Node is not required at runtime.
+
+No-Python build (Windows x64): `python pixelforge/tools/build_standalone.py` produces
+`dist/pixelforge-<version>-windows-x64-noinstall.zip` (~120 MB) with a bundled Python 3.12 runtime,
+all engine dependencies, and `web/dist`. Extract the zip and run `PixelForge.bat`; no Python or Node
+installation is required. `download_models.bat` fetches optional AI models.
 
 ### AI models (optional)
 

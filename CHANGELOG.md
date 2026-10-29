@@ -2,6 +2,19 @@
 
 本项目遵循语义化版本；日期为发布日。
 
+## 0.11.0 — 2026-10-29
+
+### Added
+- 免 Python 安装包（Windows x64）：`tools/build_standalone.py` 生成
+  `dist/pixelforge-<version>-windows-x64-noinstall.zip`，内置 Python 3.12 运行时与全部依赖，
+  解压后双击 `PixelForge.bat` 即可运行，无需安装 Python 或 Node。
+- 包内附带 `download_models.bat`（调用内置 Python 下载 AI 模型）与 MSVC 运行库，提升干净系统兼容性。
+- 内置运行时隔离宿主机用户级 Python 包（`PYTHONNOUSERSITE=1`），避免版本冲突。
+
+### Changed
+- 免 Python 包不含模型权重与用户数据；会话/日志仍写入系统数据目录，可用 `PIXELFORGE_DATA_DIR` 覆盖。
+- 免 Python 包当前仅支持 Windows x64；macOS/Linux 仍使用便携 zip + 系统 Python。
+
 ## 0.10.0 — 2026-10-28
 
 ### Added

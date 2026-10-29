@@ -1,6 +1,6 @@
 [project]
 name = "pixelforge"
-version = "0.10.0"
+version = "0.11.0"
 description = "图片转像素画引擎：分层索引色输出，确定性管线 + 可选 AI 增强"
 license = "MIT"
 requires-python = ">=3.11"

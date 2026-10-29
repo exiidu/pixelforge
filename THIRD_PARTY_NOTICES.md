@@ -22,6 +22,7 @@ PixelForge 本体以 **MIT** 许可发布（见根目录 `LICENSE`）。仓库�
 | NumPy / Pillow / OpenCV | BSD-3-Clause / HPND / Apache-2.0 |
 | onnxruntime | MIT |
 | MCP Python SDK | MIT |
+| Microsoft Visual C++ 运行库（仅免 Python 包内置） | Microsoft 可再分发运行库条款 |
 | Vite / TypeScript | MIT / Apache-2.0 |
 
 完整依赖树以 `pixelforge/pyproject.toml` 与 `pixelforge/web/package-lock.json` 为准；

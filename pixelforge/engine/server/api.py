@@ -68,7 +68,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="PixelForge Engine", version="0.10.0", lifespan=_lifespan)
+app = FastAPI(title="PixelForge Engine", version="0.11.0", lifespan=_lifespan)
 
 
 def _cors_origins() -> list[str]:

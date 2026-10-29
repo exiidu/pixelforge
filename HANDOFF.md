@@ -1,6 +1,6 @@
 # PixelForge 交接文档（HANDOFF）
 
-> 更新：2026-10-28。写给下一个接手的 AI 会话或开发者：读这一份 + 三份设计文档即可接管全部工作。
+> 更新：2026-10-29。写给下一个接手的 AI 会话或开发者：读这一份 + 三份设计文档即可接管全部工作。
 
 ---
 
@@ -22,7 +22,8 @@
 - 编辑器：开发 http://localhost:5173；单进程/便携包 http://127.0.0.1:8700（引擎托管 `web/dist`）。`?demo=1` 自动开 3 张合成测试图。
 - 引擎单独启动脚本：`start_engine.bat`；macOS/Linux 可用 `start_all.sh`。
 - 便携包：`python pixelforge/tools/build_release.py` → `dist/pixelforge-<version>-portable.zip`。
-- 测试：`cd pixelforge && python -m pytest -q`（130 个单测）。
+- 免 Python 包（Windows x64）：`python pixelforge/tools/build_standalone.py` → `dist/pixelforge-<version>-windows-x64-noinstall.zip`（内置 Python 3.12 + 依赖 + 前端；`--reuse` 可复用已下载运行时）。
+- 测试：`cd pixelforge && python -m pytest -q`（131 个单测）。
 - 前端构建：`cd pixelforge/web && npx tsc --noEmit && npm run build`（dev 模式 HMR 即时生效，构建产物 dist/ 仅备查）。
 
 ## 3. 文档索引（按需读）
@@ -76,7 +77,8 @@
 | 分发 0.8.0（引擎托管 `web/dist` 单进程 :8700；启动脚本自动分流；`tools/build_release.py` 便携 zip；`web_dist` 健康状态） | ✅ 2026-10-27 |
 | 可靠性 0.9.0（数据目录迁出安装目录；日志轮转 + 诊断包；会话 `.bak` 回退；统一错误封包；离线/恢复轮询；前端异常兜底；删图层确认） | ✅ 2026-10-28 |
 | 工作流 0.10.0（批量导入结果/重试/JSON 报告/重复源；拖拽打开图片与项目；导出预设记忆；图集 `.atlas.json`；标签重命名；调色板 OKLab 可辨性检查） | ✅ 2026-10-28 |
-| 后续产品化 A4–H（色盲辅助、多文档工程、免 Python 安装包、token 等）见 `productization-roadmap.md` | ⬜ |
+| 分发 0.11.0（Windows x64 免 Python 包：内置 Python 3.12 + 全部依赖 + MSVC 运行库；`PixelForge.bat`/`download_models.bat`；用户级包隔离） | ✅ 2026-10-29 |
+| 后续产品化 A4–H（多文档工程、macOS/Linux 免 Python 包、token、签名等）见 `productization-roadmap.md` | ⬜ |
 
 ## 5. 架构关键决策（改代码前必读）
 
